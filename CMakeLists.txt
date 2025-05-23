@@ -27,7 +27,7 @@ set(CPP_FILES csrc/common.cpp csrc/cpu_ops.cpp csrc/pythonInterface.cpp)
 set(CUDA_FILES csrc/ops.cu csrc/kernels.cu)
 set(MPS_FILES csrc/mps_ops.mm)
 set(METAL_FILES csrc/mps_kernels.metal)
-set(XPU_FILES csrc/xpu_ops.cpp)
+set(XPU_FILES csrc/xpu_ops.cpp csrc/xpu_kernels.cpp)
 # C++ sources are always included
 list(APPEND SRC_FILES ${CPP_FILES})
 
