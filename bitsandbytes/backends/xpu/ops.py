@@ -1,9 +1,13 @@
 from collections.abc import Sequence
+import ctypes as ct
 
 import torch
 
+from bitsandbytes.functional import _get_tensor_stream, get_ptr
+
 from ..._ops import register_kernel
 from ..utils import ipex_xpu
+from ...cextension import lib
 
 if torch.__version__ >= (2, 7):
 
@@ -17,15 +21,43 @@ if torch.__version__ >= (2, 7):
 
 if ipex_xpu:
 
-    @register_kernel("bitsandbytes::dequantize_nf4_ipex", "xpu")
+    @register_kernel("bitsandbytes::dequantize_4bit", "xpu")
     def _(
         A: torch.Tensor,
         absmax: torch.Tensor,
         blocksize: int,
+        quant_type: str,
         shape: Sequence[int],
         dtype: torch.dtype,
     ) -> torch.Tensor:
-        return torch.ops.torch_ipex.dequantize_4bit(A, "nf4", shape, absmax, None, blocksize).t().to(dtype)
+        print("this is bitsandbytes::dequantize_4bit ..")
+        #return torch.ops.torch_ipex.dequantize_4bit(A, "nf4", shape, absmax, None, blocksize).t().to(dtype)
+        args = (
+            None,
+            get_ptr(A),
+            get_ptr(absmax),
+            #get_ptr(out),
+            ct.c_int(blocksize),
+            #ct.c_int(out.numel()),
+            _get_tensor_stream(A),
+        )
+
+        #lib.cdequantize_blockwise_fp32_nf4(*args)
+        if dtype == torch.bfloat16:
+            #if quant_type == "fp4":
+            #    lib.cdequantize_blockwise_bf16_fp4(*args)
+            #else:
+                lib.cdequantize_blockwise_bf16_nf4(*args)
+        elif dtype == torch.float16:
+            #if quant_type == "fp4":
+            #    lib.cdequantize_blockwise_fp16_fp4(*args)
+            #else:
+                lib.cdequantize_blockwise_fp16_nf4(*args)
+        elif dtype == torch.float32:
+            #if quant_type == "fp4":
+            #    lib.cdequantize_blockwise_fp32_fp4(*args)
+            #else:
+                lib.cdequantize_blockwise_fp32_nf4(*args)
 
     @register_kernel("bitsandbytes::dequantize_blockwise", "xpu")
     def _(

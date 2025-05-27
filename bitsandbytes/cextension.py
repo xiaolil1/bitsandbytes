@@ -41,6 +41,7 @@ def get_cuda_bnb_library_path(cuda_specs: CUDASpecs) -> Path:
 class BNBNativeLibrary:
     _lib: ct.CDLL
     compiled_with_cuda = False
+    #compiled_with_xpu = False
 
     def __init__(self, lib: ct.CDLL):
         self._lib = lib
@@ -69,6 +70,15 @@ class CudaBNBNativeLibrary(BNBNativeLibrary):
         lib.get_cusparse.restype = ct.c_void_p
         lib.cget_managed_ptr.restype = ct.c_void_p
 
+
+#class XPUBNBNativeLibrary(BNBNativeLibrary):
+#    compiled_with_xpu = True
+#
+#    def __init__(self, lib: ct.CDLL):
+#        super().__init__(lib)
+#        lib.get_context.restype = ct.c_void_p
+#        lib.get_cusparse.restype = ct.c_void_p
+#        lib.cget_managed_ptr.restype = ct.c_void_p
 
 def get_available_cuda_binary_versions() -> list[str]:
     """Get formatted CUDA versions from existing library files using cuda_specs logic"""
@@ -268,6 +278,11 @@ def get_native_library() -> BNBNativeLibrary:
 
         binary_path = cuda_binary_path
 
+    import pdb
+    pdb.set_trace()
+    if torch._C._has_xpu:
+        binary_path = PACKAGE_DIR / f"libbitsandbytes_xpu{DYNAMIC_LIBRARY_SUFFIX}"
+
     logger.debug(f"Loading bitsandbytes native library from: {binary_path}")
 
     # Try to load the library - any errors will propagate up
@@ -280,6 +295,7 @@ def get_native_library() -> BNBNativeLibrary:
         "The installed version of bitsandbytes was compiled without GPU support. "
         "8-bit optimizers and GPU quantization are unavailable."
     )
+
     return BNBNativeLibrary(dll)
 
 
