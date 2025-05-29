@@ -278,8 +278,6 @@ def get_native_library() -> BNBNativeLibrary:
 
         binary_path = cuda_binary_path
 
-    import pdb
-    pdb.set_trace()
     if torch._C._has_xpu:
         binary_path = PACKAGE_DIR / f"libbitsandbytes_xpu{DYNAMIC_LIBRARY_SUFFIX}"
 

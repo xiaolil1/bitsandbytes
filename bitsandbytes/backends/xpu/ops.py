@@ -31,33 +31,47 @@ if ipex_xpu:
         dtype: torch.dtype,
     ) -> torch.Tensor:
         print("this is bitsandbytes::dequantize_4bit ..")
+        out = torch.empty(shape, dtype=dtype, device=A.device)
+        _dequantize_4bit_impl(A, absmax, blocksize, quant_type, dtype, out=out)
         #return torch.ops.torch_ipex.dequantize_4bit(A, "nf4", shape, absmax, None, blocksize).t().to(dtype)
-        args = (
-            None,
-            get_ptr(A),
-            get_ptr(absmax),
-            #get_ptr(out),
-            ct.c_int(blocksize),
-            #ct.c_int(out.numel()),
-            _get_tensor_stream(A),
-        )
 
-        #lib.cdequantize_blockwise_fp32_nf4(*args)
-        if dtype == torch.bfloat16:
-            #if quant_type == "fp4":
-            #    lib.cdequantize_blockwise_bf16_fp4(*args)
-            #else:
-                lib.cdequantize_blockwise_bf16_nf4(*args)
-        elif dtype == torch.float16:
-            #if quant_type == "fp4":
-            #    lib.cdequantize_blockwise_fp16_fp4(*args)
-            #else:
-                lib.cdequantize_blockwise_fp16_nf4(*args)
-        elif dtype == torch.float32:
-            #if quant_type == "fp4":
-            #    lib.cdequantize_blockwise_fp32_fp4(*args)
-            #else:
-                lib.cdequantize_blockwise_fp32_nf4(*args)
+def _dequantize_4bit_impl(
+    A: torch.Tensor,
+    absmax: torch.Tensor,
+    blocksize: int,
+    quant_type: str,
+    dtype: torch.dtype,
+    out: torch.Tensor,
+    ) -> None:
+    print("this is bitsandbytes::_dequantize_4bit_impl ..")
+    args = (
+        None,
+        get_ptr(A),
+        get_ptr(absmax),
+        get_ptr(out),
+        ct.c_int(blocksize),
+        ct.c_int(out.numel()),
+        _get_tensor_stream(A),
+    )
+
+    #lib.cdequantize_blockwise_fp32_nf4(*args)
+    if dtype == torch.bfloat16:
+        #if quant_type == "fp4":
+        #    lib.cdequantize_blockwise_bf16_fp4(*args)
+        #else:
+            lib.cdequantize_blockwise_bf16_nf4(*args)
+    elif dtype == torch.float16:
+        #if quant_type == "fp4":
+        #    lib.cdequantize_blockwise_fp16_fp4(*args)
+        #else:
+            lib.cdequantize_blockwise_fp16_nf4(*args)
+    elif dtype == torch.float32:
+        #if quant_type == "fp4":
+        #    lib.cdequantize_blockwise_fp32_fp4(*args)
+        #else:
+            print("before lib.cdequantize_blockwise_fp32_nf4")
+            lib.cdequantize_blockwise_fp32_nf4(*args)
+            print("after lib.cdequantize_blockwise_fp32_nf4")
 
     @register_kernel("bitsandbytes::dequantize_blockwise", "xpu")
     def _(
