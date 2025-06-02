@@ -35,6 +35,8 @@
 #
 #  SYCL_ADD_LIBRARY
 
+message(STATUS "this is FindSYCL.cmake ...")
+
 macro(SYCL_FIND_HELPER_FILE _name _extension)
   set(_full_name "${_name}.${_extension}")
   # CMAKE_CURRENT_LIST_FILE contains the full path to the file currently being
@@ -361,10 +363,12 @@ endfunction()
 function(SYCL_COMPUTE_DEVICE_OBJECT_FILE_NAME output_file_var sycl_target)
   set(generated_extension ${CMAKE_${SYCL_C_OR_CXX}_OUTPUT_EXTENSION})
   set(output_file "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${sycl_target}.dir/${CMAKE_CFG_INTDIR}/${sycl_target}_sycl_device_obj${generated_extension}")
+  message(STATUS "output_file: ${output_file}")
   set(${output_file_var} "${output_file}" PARENT_SCOPE)
 endfunction()
 
 macro(SYCL_LINK_DEVICE_OBJECTS output_file sycl_target)
+  message(STATUS "this is SYCL_LINK_DEVICE_OBJECTS ...")
   set(object_files)
   list(APPEND object_files ${ARGN})
 
@@ -487,7 +491,10 @@ macro(SYCL_ADD_EXECUTABLE sycl_target)
     set(SYCL_C_OR_CXX C)
   endif()
 
+  message(STATUS "ADD EXECUTABLE...........")
+  message(STATUS "_sycl_sources is ${_sycl_sources}")
   # Separate the sources from the options
+  #message(STATUS "_sycl_sources ${_cxx_sources}")
   SYCL_GET_SOURCES_AND_OPTIONS(
     _sycl_sources
     _cxx_sources

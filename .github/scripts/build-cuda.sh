@@ -32,7 +32,7 @@ if [ "${build_os:0:6}" == ubuntu ]; then
         "dnf update -y \
         && dnf install cmake gcc-toolset-11 -y \
         && source scl_source enable gcc-toolset-11 \
-        && cmake -DCOMPUTE_BACKEND=cuda -DCOMPUTE_CAPABILITY=\"${build_capability}\" . \
+            && cmake -DCOMPUTE_BACKEND=cuda -DCOMPUTE_CAPABILITY=\"${build_capability}\" . \
         && cmake --build . --config Release"
 else
     pip install cmake==3.28.3

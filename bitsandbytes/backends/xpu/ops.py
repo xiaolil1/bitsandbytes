@@ -32,10 +32,10 @@ if ipex_xpu:
     ) -> torch.Tensor:
         print("this is bitsandbytes::dequantize_4bit ..")
         out = torch.empty(shape, dtype=dtype, device=A.device)
-        _dequantize_4bit_impl(A, absmax, blocksize, quant_type, dtype, out=out)
+        _dequantize_4bit_impl_xpu(A, absmax, blocksize, quant_type, dtype, out=out)
         #return torch.ops.torch_ipex.dequantize_4bit(A, "nf4", shape, absmax, None, blocksize).t().to(dtype)
 
-def _dequantize_4bit_impl(
+def _dequantize_4bit_impl_xpu(
     A: torch.Tensor,
     absmax: torch.Tensor,
     blocksize: int,
@@ -43,6 +43,8 @@ def _dequantize_4bit_impl(
     dtype: torch.dtype,
     out: torch.Tensor,
     ) -> None:
+    import pdb
+    pdb.set_trace()
     print("this is bitsandbytes::_dequantize_4bit_impl ..")
     args = (
         None,
@@ -71,6 +73,7 @@ def _dequantize_4bit_impl(
         #else:
             print("before lib.cdequantize_blockwise_fp32_nf4")
             lib.cdequantize_blockwise_fp32_nf4(*args)
+            #lib.ctest(*args)
             print("after lib.cdequantize_blockwise_fp32_nf4")
 
     @register_kernel("bitsandbytes::dequantize_blockwise", "xpu")

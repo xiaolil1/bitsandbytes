@@ -7,7 +7,7 @@ function(CHECK_SYCL_FLAG FLAG VARIABLE_NAME)
   set(TEST_EXE_FILE "${TEMP_DIR}/check_options.out")
   file(WRITE ${TEST_SRC_FILE} "#include <iostream>\nint main() { std::cout << \"Checking compiler options ...\" << std::endl; return 0; }\n")
   execute_process(
-      COMMAND ${SYCL_COMPILER} -fsycl ${TEST_SRC_FILE} -o ${TEST_EXE_FILE} ${FLAG}
+      COMMAND ${SYCL_COMPILER} -fsycl ${TEST_SRC_FILE} -o ${TEST_EXE_FILE}  #${FLAG}
       WORKING_DIRECTORY ${TEMP_DIR}
       OUTPUT_VARIABLE output
       ERROR_VARIABLE output
@@ -22,9 +22,11 @@ function(CHECK_SYCL_FLAG FLAG VARIABLE_NAME)
   file(REMOVE_RECURSE ${TEMP_DIR})
 endfunction()
 
+message(STATUS "this is BuildFlags.cmake........................")
 # Support GCC on Linux and MSVC on Windows at the moment.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   # # -- Host flags (SYCL_CXX_FLAGS)
+  message(STATUS "CMAKE_CXX_COMPILER_ID: ${CMAKE_CXX_COMPILER_ID}")
   if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     list(APPEND SYCL_HOST_FLAGS /std:c++17)
     list(APPEND SYCL_HOST_FLAGS /MD)

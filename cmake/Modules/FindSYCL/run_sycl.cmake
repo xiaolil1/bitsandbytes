@@ -124,6 +124,8 @@ if(WIN32)
 else()
   set(SYCL_dependency_file_args -MD -MF "${SYCL_generated_dependency_file}")
 endif()
+message(STATUS "this is run_sycl!!!")
+message(STATUS "SYCL_executable: ${SYCL_executable}, source_file: ${source_file}")
 SYCL_execute_process(
   "Generating ${generated_file}"
   COMMAND "${SYCL_executable}"
