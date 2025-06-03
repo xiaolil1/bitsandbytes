@@ -21,7 +21,8 @@ dtype = torch.float32
 device = "xpu"
 quant_type = "nf4"
 blocksize = 64
-A1 = torch.randn(1024, 1024, device=device, dtype=dtype)
+A1 = torch.randn(1024, 1024, device=device, dtype=dtype) / 2
+#A1 [0] = 5
 qa, SA = F.quantize_4bit(A1, blocksize=blocksize, quant_type=quant_type)
 import pdb
 pdb.set_trace()

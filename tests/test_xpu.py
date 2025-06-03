@@ -27,11 +27,11 @@ class TestQuantize4BitFunctional:
     @pytest.mark.parametrize("quant_type", ["nf4"]) #["fp4", "nf4"])
     @pytest.mark.parametrize("blocksize", [64]) #, 128, 256, 512, 1024, 2048, 4096])
     def test_4bit_quant(self, device, dtype, quant_type, blocksize):
-        A1 = torch.randn(1024, 1024, device=device, dtype=dtype)
+        A1 = torch.randn(1024, 512, device=device, dtype=dtype)
         qa, SA = F.quantize_4bit(A1, blocksize=blocksize, quant_type=quant_type)
         A2 = F.dequantize_4bit(qa, SA, blocksize=blocksize, quant_type=quant_type)
-        #print("A1 = ", A1)
-        #print("A2 = ", A2)
+        #print("A1 = ", A1[0])
+        #print("A2 = ", A2[0])
 
         err = (A1 - A2).abs().float()
         relerr = (err / (A1.abs().float() + 1e-8)).mean()

@@ -10,8 +10,7 @@
 // #include <mps_ops.h>
 #endif
 #if BUILD_XPU
-#include "xpu_ops.h"
-#include "test.h"
+#include <xpu_ops.h>
 #endif
 #include <cpu_ops.h>
 
@@ -183,7 +182,6 @@ void dequantizeBlockwise_fp32_nf4(float *code, unsigned char *A, float *absmax, 
 /*void dequantizeBlockwise_bf16(float *code, unsigned char *A, float *absmax, __nv_bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise<__nv_bfloat16, General8bit>(code, A, absmax, out, blocksize, n, stream); }
 void dequantizeBlockwise_bf16_fp4(float *code, unsigned char *A, float *absmax, __nv_bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise<__nv_bfloat16, FP4>(NULL, A, absmax, out, blocksize, n, stream); }*/
 //void dequantizeBlockwise_bf16_nf4(float *code, unsigned char *A, float *absmax, sycl::ext::oneapi::bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise<sycl::ext::oneapi::bfloat16, NF4>(NULL, A, absmax, out, blocksize, n, stream); }
-void test_fp16(float *code, unsigned char *A,  float* absmax, sycl::ext::oneapi::bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ test(NULL, A, absmax, out, blocksize, n, stream); }
 
 #endif
 extern "C"
@@ -390,7 +388,6 @@ extern "C"
   //void cdequantize_blockwise_bf16(float *code, unsigned char *A, float *absmax, __nv_bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_bf16(code, A, absmax, out, blocksize, n, stream); }
   //void cdequantize_blockwise_bf16_fp4(float *code, unsigned char *A, float *absmax, __nv_bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_bf16_fp4(code, A, absmax, out, blocksize, n, stream); }
   //void cdequantize_blockwise_bf16_nf4(float *code, unsigned char *A, float *absmax, sycl::ext::oneapi::bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_bf16_nf4(code, A, absmax, out, blocksize, n, stream); }
-  void ctest(float *code, unsigned char *A, float *absmax, sycl::ext::oneapi::bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ ctest(code, A, absmax, out, blocksize, n, stream); }
 
 #endif
 

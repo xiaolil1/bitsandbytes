@@ -10,7 +10,6 @@ from ..utils import ipex_xpu
 from ...cextension import lib
 
 if torch.__version__ >= (2, 7):
-
     @register_kernel("bitsandbytes::int8_linear_matmul", "xpu")
     def _(A: torch.Tensor, B: torch.Tensor):
         return torch._int_mm(
@@ -18,24 +17,7 @@ if torch.__version__ >= (2, 7):
             B.t(),
         ).reshape(*A.shape[:-1], B.shape[0])
 
-
-if ipex_xpu:
-
-    @register_kernel("bitsandbytes::dequantize_4bit", "xpu")
-    def _(
-        A: torch.Tensor,
-        absmax: torch.Tensor,
-        blocksize: int,
-        quant_type: str,
-        shape: Sequence[int],
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        print("this is bitsandbytes::dequantize_4bit ..")
-        out = torch.empty(shape, dtype=dtype, device=A.device)
-        _dequantize_4bit_impl_xpu(A, absmax, blocksize, quant_type, dtype, out=out)
-        #return torch.ops.torch_ipex.dequantize_4bit(A, "nf4", shape, absmax, None, blocksize).t().to(dtype)
-
-def _dequantize_4bit_impl_xpu(
+def _dequantize_4bit_impl(
     A: torch.Tensor,
     absmax: torch.Tensor,
     blocksize: int,
@@ -44,7 +26,7 @@ def _dequantize_4bit_impl_xpu(
     out: torch.Tensor,
     ) -> None:
     import pdb
-    pdb.set_trace()
+    #pdb.set_trace()
     print("this is bitsandbytes::_dequantize_4bit_impl ..")
     args = (
         None,
@@ -76,6 +58,30 @@ def _dequantize_4bit_impl_xpu(
             #lib.ctest(*args)
             print("after lib.cdequantize_blockwise_fp32_nf4")
 
+@register_kernel("bitsandbytes::dequantize_4bit", "xpu")
+def _(
+    A: torch.Tensor,
+    absmax: torch.Tensor,
+    blocksize: int,
+    quant_type: str,
+    shape: Sequence[int],
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    print("this is bitsandbytes::dequantize_4bit ..")
+    import pdb
+    #pdb.set_trace()
+    out = torch.zeros(shape, dtype=dtype, device=A.device)
+    A_ref = A.clone()
+    _dequantize_4bit_impl(A, absmax, blocksize, quant_type, dtype, out=out)
+
+    ##just for kernel porting test, will replace by UT
+    #out_ref = torch.ops.torch_ipex.dequantize_4bit(A_ref, "nf4", shape, absmax, None, blocksize).to(dtype)
+    #max_diff = abs(out - out_ref)
+    #print("max_diff = ", max_diff)
+    #print(out[0])
+    return out
+
+if ipex_xpu: #will be replace by native kernel
     @register_kernel("bitsandbytes::dequantize_blockwise", "xpu")
     def _(
         A: torch.Tensor,

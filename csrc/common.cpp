@@ -1,4 +1,4 @@
-#include <common.h>
+#include "common.h"
 #include <float.h>
 
 void quantize_block(const quantize_block_args& args) {
