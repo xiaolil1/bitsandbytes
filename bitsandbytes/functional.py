@@ -439,6 +439,8 @@ def is_on_gpu(tensors: Iterable[Optional[torch.Tensor]]):
 
 def _get_tensor_stream(tensor: Tensor) -> ct.c_void_p:
     # We use the raw stream for performance reasons.
+    if tensor.device.type == "xpu" and ipex_xpu:
+        return ct.c_void_p(torch._C._xpu_getCurrentRawStream(tensor.device.index))
     return ct.c_void_p(torch._C._cuda_getCurrentRawStream(tensor.device.index))
 
 
@@ -1038,14 +1040,26 @@ def dequantize_4bit(
             absmax = absmax.float()
 
     # IPEX format is different, we need extra process.
-    if getattr(quant_state, "ipex", False) and quant_state.quant_type == "nf4":
-        return torch.ops.bitsandbytes.dequantize_nf4_ipex(
+    #if getattr(quant_state, "ipex", False) and quant_state.quant_type == "nf4":
+    if A.device.type == "xpu" and quant_state.quant_type == "nf4":
+        #return torch.ops.bitsandbytes.dequantize_nf4_ipex(
+        #    A,
+        #    absmax,
+        #    quant_state.blocksize,
+        #    quant_state.shape,
+        #    quant_state.dtype,
+        #)
+        import pdb
+        #pdb.set_trace()
+        return torch.ops.bitsandbytes.dequantize_4bit(
             A,
             absmax,
             quant_state.blocksize,
+            quant_state.quant_type,
             quant_state.shape,
             quant_state.dtype,
         )
+        #pdb.set_trace()
 
     if out is not None:
         torch.ops.bitsandbytes.dequantize_4bit.out(

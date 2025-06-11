@@ -9,6 +9,9 @@
 #if BUILD_MPS
 // #include <mps_ops.h>
 #endif
+#if BUILD_XPU
+#include <xpu_ops.h>
+#endif
 #include <cpu_ops.h>
 
 // We cannot call templated code from C, so we wrap the template in a C compatible call here if necessary.
@@ -163,6 +166,21 @@ void spmm_coo_very_sparse_naive_int8(int *max_count, int *max_idx, int *offset_r
 { spmm_coo_very_sparse_naive<signed char, 8>(max_count, max_idx, offset_rowidx, rowidx, colidx, values, B, out, dequant_stats, nnz_rows, nnz, rowsA, rowsB, colsB); }
 #endif
 
+#if BUILD_XPU
+
+/*void dequantizeBlockwise_fp16(float *code, unsigned char *A, float *absmax, half *out, int blocksize, const int n, sycl::queue*  stream){ dequantizeBlockwise<half, General8bit>(code, A, absmax, out, blocksize, n, stream); } \
+void dequantizeBlockwise_fp16_fp4(float *code, unsigned char *A, float *absmax, half *out, int blocksize, const int n, sycl::queue*  stream){ dequantizeBlockwise<half, FP4>(NULL, A, absmax, out, blocksize, n, stream); } \*/
+//void dequantizeBlockwise_fp16_nf4(float *code, unsigned char *A, float *absmax, sycl::half *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise<sycl::half, NF4>(NULL, A, absmax, out, blocksize, n, stream); }
+
+/*void dequantizeBlockwise_fp32(float *code, unsigned char *A, float *absmax, float *out, int blocksize, const int n, sycl::queue*  stream){ dequantizeBlockwise<float, General8bit>(code, A, absmax, out, blocksize, n, stream); }
+void dequantizeBlockwise_fp32_fp4(float *code, unsigned char *A, float *absmax, float *out, int blocksize, const int n, sycl::queue*  stream){ dequantizeBlockwise<float, FP4>(NULL, A, absmax, out, blocksize, n, stream); }*/
+void dequantizeBlockwise_fp32_nf4(float *code, unsigned char *A, float *absmax, float *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise<float, NF4>(NULL, A, absmax, out, blocksize, n, stream); }
+
+/*void dequantizeBlockwise_bf16(float *code, unsigned char *A, float *absmax, __nv_bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise<__nv_bfloat16, General8bit>(code, A, absmax, out, blocksize, n, stream); }
+void dequantizeBlockwise_bf16_fp4(float *code, unsigned char *A, float *absmax, __nv_bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise<__nv_bfloat16, FP4>(NULL, A, absmax, out, blocksize, n, stream); }*/
+//void dequantizeBlockwise_bf16_nf4(float *code, unsigned char *A, float *absmax, sycl::ext::oneapi::bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise<sycl::ext::oneapi::bfloat16, NF4>(NULL, A, absmax, out, blocksize, n, stream); }
+
+#endif
 extern "C"
 {
 #if BUILD_CUDA
@@ -348,6 +366,22 @@ extern "C"
 
 	void cgemm_4bit_inference_naive_fp32(int m, int n, int k, float * A,  unsigned char* B,  float *absmax, float *datatype, float * out,  int lda, int ldb, int ldc, int blocksize, cudaStream_t stream)
 	{ gemm_4bit_inference_naive_fp32(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream); }
+
+#endif
+
+#if BUILD_XPU
+
+  //void cdequantize_blockwise_fp16_fp4(float *code, unsigned char *A, float *absmax, half *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_fp16_fp4(code, A, absmax, out, blocksize, n, stream); }
+  //void cdequantize_blockwise_fp16(float *code, unsigned char *A, float *absmax, half *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_fp16(code, A, absmax, out, blocksize, n, stream); }
+  //void cdequantize_blockwise_fp16_nf4(float *code, unsigned char *A, float *absmax, sycl::half *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_fp16_nf4(code, A, absmax, out, blocksize, n, stream); }
+
+  //void cdequantize_blockwise_fp32(float *code, unsigned char *A, float *absmax, float *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_fp32(code, A, absmax, out, blocksize, n, stream); }
+  //void cdequantize_blockwise_fp32_fp4(float *code, unsigned char *A, float *absmax, float *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_fp32_fp4(code, A, absmax, out, blocksize, n, stream); }
+  void cdequantize_blockwise_fp32_nf4(float *code, unsigned char *A, float *absmax, float *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_fp32_nf4(code, A, absmax, out, blocksize, n, stream); }
+
+  //void cdequantize_blockwise_bf16(float *code, unsigned char *A, float *absmax, __nv_bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_bf16(code, A, absmax, out, blocksize, n, stream); }
+  //void cdequantize_blockwise_bf16_fp4(float *code, unsigned char *A, float *absmax, __nv_bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_bf16_fp4(code, A, absmax, out, blocksize, n, stream); }
+  //void cdequantize_blockwise_bf16_nf4(float *code, unsigned char *A, float *absmax, sycl::ext::oneapi::bfloat16 *out, int blocksize, const int n, sycl::queue* stream){ dequantizeBlockwise_bf16_nf4(code, A, absmax, out, blocksize, n, stream); }
 
 #endif
 
