@@ -271,7 +271,9 @@ def get_native_library() -> BNBNativeLibrary:
 
         binary_path = cuda_binary_path
 
-    if torch._C._has_xpu:
+    import pdb
+    #pdb.set_trace()
+    if 1: #torch._C._has_xpu:
         binary_path = PACKAGE_DIR / f"libbitsandbytes_xpu{DYNAMIC_LIBRARY_SUFFIX}"
 
     logger.debug(f"Loading bitsandbytes native library from: {binary_path}")

@@ -239,7 +239,7 @@ if(BUILD_XPU)
     target_include_directories(bitsandbytes PUBLIC ${SYCL_INCLUDE_DIR})
     target_link_directories(bitsandbytes PUBLIC ${SYCL_LIBRARY_DIR})
 
-    set_property(TARGET bitsandbytes PROPERTY CXX_STANDARD 17)
+    set_property(TARGET bitsandbytes PROPERTY CXX_STANDARD 20)
     target_compile_options(bitsandbytes PRIVATE ${SYCL_COMPILE_FLAGS})
     target_link_options(bitsandbytes PRIVATE ${SYCL_LINK_FLAGS})
 

@@ -1629,24 +1629,33 @@ def gemv_4bit(
     if state.nested:
         absmax = dequantize_blockwise(absmax, state.state2) + state.offset
 
-    if getattr(state, "ipex", False) and state.quant_type == "nf4":
-        # compute_dtype: 1 indicates fp16, 2 indicates bf16
-        compute_dtype = 2 if A.dtype == torch.bfloat16 else 1
-        out = torch.ops.torch_ipex.woq_linear(
+    #if getattr(state, "ipex", False) and state.quant_type == "nf4":
+    #    # compute_dtype: 1 indicates fp16, 2 indicates bf16
+    #    compute_dtype = 2 if A.dtype == torch.bfloat16 else 1
+    #    out = torch.ops.torch_ipex.woq_linear(
+    #        A,
+    #        B,
+    #        "nf4",
+    #        state.shape,
+    #        state.new_scales,
+    #        state.new_zeros,
+    #        None,
+    #        None,
+    #        state.blocksize,
+    #        compute_dtype,
+    #        1,
+    #        state.compensation,
+    #    )
+    #    return out
+    if A.device.type == "xpu":
+        return torch.ops.bitsandbytes.gemv_4bit(
             A,
             B,
-            "nf4",
             state.shape,
-            state.new_scales,
-            state.new_zeros,
-            None,
-            None,
+            absmax,
+            state.code,
             state.blocksize,
-            compute_dtype,
-            1,
-            state.compensation,
         )
-        return out
 
     if out is not None:
         torch.ops.bitsandbytes.gemv_4bit.out(
