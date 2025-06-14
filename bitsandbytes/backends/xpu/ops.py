@@ -2,7 +2,7 @@ from collections.abc import Sequence
 import ctypes as ct
 
 import torch
-
+import pdb
 from bitsandbytes.functional import _get_tensor_stream, get_ptr
 
 from ..._ops import register_kernel
@@ -156,7 +156,7 @@ def _dequantize_blockwise_impl(
         ct.c_int(A.numel()),
         _get_tensor_stream(A),
     )
-
+    #pdb.set_trace()
     if dtype == torch.float16:
         lib.cdequantize_blockwise_fp16(*args)
     elif dtype == torch.bfloat16:

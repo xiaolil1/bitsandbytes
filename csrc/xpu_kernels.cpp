@@ -220,11 +220,11 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
       valid_items_store = valid_items_load;
     }
 
-sycl::ext::oneapi::experimental::printf("n_load = %d, n = %d, (n + 1) / 2 - i = %d, TILE_SIZE = %d, base_idx = %d, valid_items_load = %d, valid_items_store = %d\n",n_load, n,((n + 1) / 2 - i), TILE_SIZE, base_idx, valid_items_load, valid_items_store);
+//sycl::ext::oneapi::experimental::printf("n_load = %d, n = %d, (n + 1) / 2 - i = %d, TILE_SIZE = %d, base_idx = %d, valid_items_load = %d, valid_items_store = %d\n",n_load, n,((n + 1) / 2 - i), TILE_SIZE, base_idx, valid_items_load, valid_items_store);
     // Avoid expensive divsion by the blocksize (as blocksize will always be a power-of-2)
     local_abs_max = absmax[(i + local_idx)  >> (31 - std::countl_zero<unsigned int>(blocksize))];
-    sycl::ext::oneapi::experimental::printf("i = %d, item.get_local_id(0) = %d, NUM_PER_TH = %d, local_abs_max = %f\n",i,item.get_local_id(0),NUM_PER_TH,local_abs_max);
-    sycl::ext::oneapi::experimental::printf("watch log .......\n");
+    //sycl::ext::oneapi::experimental::printf("i = %d, item.get_local_id(0) = %d, NUM_PER_TH = %d, local_abs_max = %f\n",i,item.get_local_id(0),NUM_PER_TH,local_abs_max);
+    //sycl::ext::oneapi::experimental::printf("watch log .......\n");
     //reinterpret_cast<sycl::vec<unsigned char, 4>(&)[NUM_PER_TH]>(qvals)[0] = reinterpret_cast<sycl::vec<unsigned char, 4>*>(A)[i / NUM_PER_TH];
     item.barrier();
     auto local_src = &(A[i]);
@@ -232,10 +232,10 @@ sycl::ext::oneapi::experimental::printf("n_load = %d, n = %d, (n + 1) / 2 - i = 
     for (int lt = 0; lt < NUM_PER_TH; lt++) {
       if (local_idx + lt < valid_items_load) {
         qvals[lt] = local_src[local_idx + lt];
-      sycl::ext::oneapi::experimental::printf("blockload: item.get_local_id(0) = %d, local_src[%d] = %hhu, qvals[%d] = %hhu\n",item.get_local_id(0), (item.get_local_id(0) * NUM_PER_TH + lt), (uint8_t)local_src[item.get_local_id(0) * NUM_PER_TH + lt],lt,(uint8_t)qvals[lt]);
+      //sycl::ext::oneapi::experimental::printf("blockload: item.get_local_id(0) = %d, local_src[%d] = %hhu, qvals[%d] = %hhu\n",item.get_local_id(0), (item.get_local_id(0) * NUM_PER_TH + lt), (uint8_t)local_src[item.get_local_id(0) * NUM_PER_TH + lt],lt,(uint8_t)qvals[lt]);
       } else {
         qvals[lt] = (unsigned char)0;
-      sycl::ext::oneapi::experimental::printf("blockload default qvals[%d] = %b\n",lt,qvals[lt]);
+      //sycl::ext::oneapi::experimental::printf("blockload default qvals[%d] = %b\n",lt,qvals[lt]);
       }
     }
     switch (DATA_TYPE)
@@ -262,11 +262,11 @@ sycl::ext::oneapi::experimental::printf("n_load = %d, n = %d, (n + 1) / 2 - i = 
           {
             vals[j*2] = dDequantizeNF4(qvals[j] >> 4)* local_abs_max;
 
-            sycl::ext::oneapi::experimental::printf("qvals[%d] = %hhu, qvals[%d] >> 4 = %hhu, dDequantizeNF4(qvals[j] >> 4) = %f, local_abs_max = %f, vals[%d] = %f\n",j, (uint8_t)(qvals[j]), j, (uint8_t)(qvals[j] >> 4), dDequantizeNF4(qvals[j] >> 4), local_abs_max, j*2, vals[j*2]);
+            //sycl::ext::oneapi::experimental::printf("qvals[%d] = %hhu, qvals[%d] >> 4 = %hhu, dDequantizeNF4(qvals[j] >> 4) = %f, local_abs_max = %f, vals[%d] = %f\n",j, (uint8_t)(qvals[j]), j, (uint8_t)(qvals[j] >> 4), dDequantizeNF4(qvals[j] >> 4), local_abs_max, j*2, vals[j*2]);
 
             vals[j*2 + 1] = dDequantizeNF4(qvals[j] & 0x0F)* local_abs_max;
 
-            sycl::ext::oneapi::experimental::printf("qvals[%d] = %hhu, qvals[%d] & 0x0F = %hhu, dDequantizeNF4(qvals[j] & 0x0F) = %f, local_abs_max = %f, vals[%d] = %f\n",j,(uint8_t)(qvals[j]),j,(uint8_t) (qvals[j] & 0x0F), dDequantizeNF4(qvals[j] & 0x0F), local_abs_max, j*2+1, vals[j*2+1]);
+            //sycl::ext::oneapi::experimental::printf("qvals[%d] = %hhu, qvals[%d] & 0x0F = %hhu, dDequantizeNF4(qvals[j] & 0x0F) = %f, local_abs_max = %f, vals[%d] = %f\n",j,(uint8_t)(qvals[j]),j,(uint8_t) (qvals[j] & 0x0F), dDequantizeNF4(qvals[j] & 0x0F), local_abs_max, j*2+1, vals[j*2+1]);
           }
           break;
     }
@@ -274,12 +274,22 @@ sycl::ext::oneapi::experimental::printf("n_load = %d, n = %d, (n + 1) / 2 - i = 
     //reinterpret_cast<sycl::vec<float, 4>*>(out)[((DATA_TYPE > 0) ? i * 2 : i + local_idx * 2) / NUM_PER_TH * 2] = reinterpret_cast<sycl::vec<float, 4>*>(vals)[NUM_PER_TH * 2];
     item.barrier();
     auto local_dst = &(out[(DATA_TYPE > 0) ? i * 2 : i]);
-    #pragma unroll //NUM_PER_TH
-    for (int lt = 0; lt < NUM_PER_TH * 2 ; lt++) {
-      if (lt < valid_items_store) {
-        local_dst[local_idx * 2 + lt] = vals[lt];
-        sycl::ext::oneapi::experimental::printf("blockstore: item.get_local_id(0) = %d, vals[%d] = %f, local_dst[%d] = %f\n",item.get_local_id(0), lt, (T)vals[lt], (item.get_local_id(0) * NUM_PER_TH * 2 + lt), local_dst[item.get_local_id(0) * NUM_PER_TH * 2 + lt]);
-      }
+    if(DATA_TYPE > 0){
+        #pragma unroll //NUM_PER_TH
+        for (int lt = 0; lt < NUM_PER_TH * 2 ; lt++) {
+          if (lt < valid_items_store) {
+            local_dst[local_idx * 2 + lt] = vals[lt];
+            //sycl::ext::oneapi::experimental::printf("blockstore: item.get_local_id(0) = %d, vals[%d] = %f, local_dst[%d] = %f\n",item.get_local_id(0), lt, (T)vals[lt], (item.get_local_id(0) * NUM_PER_TH * 2 + lt), local_dst[item.get_local_id(0) * NUM_PER_TH * 2 + lt]);
+          }
+        }
+    } else {
+        #pragma unroll //NUM_PER_TH
+        for (int lt = 0; lt < NUM_PER_TH; lt++) {
+          if (lt < valid_items_store) {
+            local_dst[local_idx + lt] = vals[lt];
+            //sycl::ext::oneapi::experimental::printf("blockstore: item.get_local_id(0) = %d, vals[%d] = %f, local_dst[%d] = %f\n",item.get_local_id(0), lt, (T)vals[lt], (item.get_local_id(0) * NUM_PER_TH * 2 + lt), local_dst[item.get_local_id(0) * NUM_PER_TH * 2 + lt]);
+          }
+        }
     }
   }
 }

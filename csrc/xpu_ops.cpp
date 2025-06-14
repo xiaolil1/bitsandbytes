@@ -6,14 +6,19 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
 {
   //std::cout<<"this is dequantizeBlockwise \n";
   auto& queue = *stream;
+  //__builtin_trap();
   const int workgroup_size = 128;
   const int num_per_th = 4;
   const int tile_size = workgroup_size * num_per_th;
+  //const int workgroup_num = (n + tile_size - 1) / tile_size; // / 2;
+  //sycl::range<1> local_range{(size_t)workgroup_size};
+  //sycl::range<1> global_range{(size_t)workgroup_num * (size_t)workgroup_size};
+  //std::cout<<"workgroup_num = "<<workgroup_num<<" tile_size = "<<tile_size<<" workgroup_size = "<<workgroup_size<<" num_per_th = "<<num_per_th<<" blocksize = "<<blocksize<<std::endl;
+  if(DATA_TYPE > 0){
+	  //std::cout<<"log1 ...\n";
   const int workgroup_num = (n + tile_size - 1) / tile_size / 2;
   sycl::range<1> local_range{(size_t)workgroup_size};
   sycl::range<1> global_range{(size_t)workgroup_num * (size_t)workgroup_size};
-  //std::cout<<"workgroup_num = "<<workgroup_num<<" tile_size = "<<tile_size<<" workgroup_size = "<<workgroup_size<<" num_per_th = "<<num_per_th<<" blocksize = "<<blocksize<<std::endl;
-  if(DATA_TYPE > 0){
     kDequantizeBlockwise<
         T,
         tile_size,
@@ -22,6 +27,10 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
         DATA_TYPE> kfn(code, A, absmax, out, blocksize / 2, n);
     sycl_kernel_submit<decltype(kfn), 1>(sycl::nd_range<1>(sycl::range<1>(global_range), sycl::range<1>(local_range)), queue, kfn);
   } else {
+	  //std::cout<<"log2 ...\n";
+  const int workgroup_num = (n + tile_size - 1) / tile_size;
+  sycl::range<1> local_range{(size_t)workgroup_size};
+  sycl::range<1> global_range{(size_t)workgroup_num * (size_t)workgroup_size};
     kDequantizeBlockwise<
         T,
         tile_size,

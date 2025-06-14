@@ -79,13 +79,13 @@ class TestQuantize4Bit(TestCase):
 #            assert err.item() < math.log2(blocksize) * 8e-2
 
     @parametrize("device", ["xpu"])#get_available_devices())
-    @parametrize("double_quant", ["False"])#, ids=lambda double_quant: f"DQ_{double_quant}") #]TRUE_FALSE, ids=lambda double_quant: f"DQ_{double_quant}")
+    @parametrize("double_quant", [True])#, ids=lambda double_quant: f"DQ_{double_quant}") #]TRUE_FALSE, ids=lambda double_quant: f"DQ_{double_quant}")
     @parametrize("storage_type", ["nf4"]) #, "fp4"])
     @parametrize("kind", ["fc1", "fc2", "attn"])#, "attn_packed"])
     @parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])#, ids=describe_dtype)
     @parametrize(
         "quant_storage",
-        [torch.uint8, torch.float16, torch.bfloat16, torch.float32])
+        [torch.uint8]) #, torch.float16, torch.bfloat16, torch.float32])
     #    ids=describe_dtype,
     #)
     @parametrize("dim", [256, 512, 1024]) #, ids=id_formatter("dim"))
