@@ -440,18 +440,21 @@ def matmul_4bit(
 ):
     assert quant_state is not None
 
-    if A.device.type in ("cpu", "xpu") and A.requires_grad == False:
-        if getattr(quant_state, "ipex", False):
-            # IPEX CPU will change weight to 4D so don't need transpose
-            B = B.t() if B.dim() == 2 else B
-            out = F.gemv_4bit(A, B, out, state=quant_state)
-            if bias is not None:
-                out += bias
-            return out
-        else:
-            return MatMul4Bit.apply(A, B, out, bias, quant_state)
-
+    #if A.device.type in ("cpu", "xpu") and A.requires_grad == False:
+    #    if getattr(quant_state, "ipex", False):
+    #        # IPEX CPU will change weight to 4D so don't need transpose
+    #        B = B.t() if B.dim() == 2 else B
+    #        out = F.gemv_4bit(A, B, out, state=quant_state)
+    #        if bias is not None:
+    #            out += bias
+    #        return out
+    #    else:
+    #        return MatMul4Bit.apply(A, B, out, bias, quant_state)
+    import pdb
+    pdb.set_trace()
+    #print("A.shape = ",A.shape)
     if A.numel() == A.shape[-1] and A.requires_grad == False and A.device.type != "hpu":
+        #pdb.set_trace()
         if A.shape[-1] % quant_state.blocksize != 0:
             warn(
                 f"Some matrices hidden dimension is not a multiple of {quant_state.blocksize} and efficient inference kernels are not supported for these (slow). Matrix input size found: {A.shape}",
