@@ -7,104 +7,6 @@
 
 #include <sycl/sycl.hpp>
 
-#if 0
-static const float lookup_table[16] = {
-    -1.0f,
-    -0.6961928009986877f,
-    -0.5250730514526367f,
-    -0.39491748809814453f,
-    -0.28444138169288635f,
-    -0.18477343022823334f,
-    -0.09105003625154495f,
-    0.0f,
-    0.07958029955625534f,
-    0.16093020141124725f,
-    0.24611230194568634f,
-    0.33791524171829224f,
-    0.44070982933044434f,
-    0.5626170039176941f,
-    0.7229568362236023f,
-    1.0f};
-
-template <typename T>
-inline T dDequantizeNF4(uint8_t val) {
-  return lookup_table[val]; // val < 16
-}
-
-template <
-    typename T,
-    int TILE_SIZE,
-    int THREADS,
-    int NUM_PER_TH,
-    int DATA_TYPE>
-SYCL_EXTERNAL void kDequantizeBlockwise_kernel(
-    float* code,
-    uint8_t* A,
-    float* absmax,
-    T* out,
-    const int blocksize,
-    const int n,
-    sycl::nd_item<1>& item) {
-  const int base_idx = (item.get_group(0) * TILE_SIZE);
-
-  uint8_t qvals[NUM_PER_TH]; // quantized data
-  T vals[NUM_PER_TH * 2]; // dequantized data
-
-  float* qvals_f = reinterpret_cast<float*>(qvals);
-  float* vals_f = reinterpret_cast<float*>(vals);
-
-  float local_abs_max =
-      absmax[(base_idx + item.get_local_id(0) * NUM_PER_TH) / (blocksize)];
-
-  // load A to qvals
-  float* A_f = reinterpret_cast<float*>(
-      &A[(base_idx + item.get_local_id(0) * NUM_PER_TH)]);
-#pragma unroll
-  for (int j = 0; j < NUM_PER_TH / (sizeof(float) / sizeof(uint8_t)); j++) {
-    qvals_f[j] = A_f[j];
-  }
-
-#pragma unroll
-  for (int j = 0; j < NUM_PER_TH; j++) {
-    // unpack to val and dequant
-    vals[j * 2] =
-        static_cast<T>(dDequantizeNF4<float>(qvals[j] >> 4) * local_abs_max);
-    vals[j * 2 + 1] =
-        static_cast<T>(dDequantizeNF4<float>(qvals[j] & 0x0F) * local_abs_max);
-  }
-
-  // write to output
-  float* out_f = reinterpret_cast<float*>(
-      &out[base_idx * 2 + item.get_local_id(0) * NUM_PER_TH * 2]);
-#pragma unroll
-  for (int j = 0; j < NUM_PER_TH * 2 / (sizeof(float) / sizeof(T)); j++) {
-    out_f[j] = vals_f[j];
-  }
-}
-
-template <
-    typename T,
-    int TILE_SIZE,
-    int THREADS,
-    int NUM_PER_TH,
-    int DATA_TYPE>
-SYCL_EXTERNAL void kDequantizeBlockwise<
-    T,
-    TILE_SIZE,
-    THREADS,
-    NUM_PER_TH,
-    DATA_TYPE>::operator()(sycl::nd_item<1> item) const {
-    kDequantizeBlockwise_kernel<
-        T,
-        TILE_SIZE,
-        THREADS,
-        NUM_PER_TH,
-        DATA_TYPE>(code, A, absmax, out, blocksize, n, item);
-  }
-
-#endif 
-
-#if 1
 inline float dDequantizeFP4Tree(unsigned char val, float absmax)
 {
   float sign = (val & 0b1000) == 8 ? -1.0f : 1.0f;
@@ -199,9 +101,8 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
     THREADS,
     NUM_PER_TH,
     DATA_TYPE>::operator()(sycl::nd_item<1> item) const {
-//sycl::ext::oneapi::experimental::printf("this is kDequantizeBlockwise_kernel ...\n");
   const int base_idx = (item.get_group(0) * TILE_SIZE);
-  size_t local_idx = item.get_local_id(0) * NUM_PER_TH;
+  size_t local_idx = item.get_local_id(0) * NUM_PER_TH;	    
   float local_abs_max = -FLT_MAX;
   const int n_load = (item.get_group_range(0) * TILE_SIZE);
   int valid_items_load = 0;
@@ -209,6 +110,7 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
 
   uint8_t qvals[NUM_PER_TH]; // quantized data
   T vals[NUM_PER_TH*((DATA_TYPE > 0) ? 2 : 1)]; // dequantized data
+						//
   //TODO: check whether for loop neccessary here.
   for (int i = base_idx; i < n_load; i += item.get_group_range(0) * TILE_SIZE) {
     //int i = base_idx;
@@ -220,30 +122,24 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
       valid_items_store = valid_items_load;
     }
 
-//sycl::ext::oneapi::experimental::printf("n_load = %d, n = %d, (n + 1) / 2 - i = %d, TILE_SIZE = %d, base_idx = %d, valid_items_load = %d, valid_items_store = %d\n",n_load, n,((n + 1) / 2 - i), TILE_SIZE, base_idx, valid_items_load, valid_items_store);
     // Avoid expensive divsion by the blocksize (as blocksize will always be a power-of-2)
     local_abs_max = absmax[(i + local_idx)  >> (31 - std::countl_zero<unsigned int>(blocksize))];
-    //sycl::ext::oneapi::experimental::printf("i = %d, item.get_local_id(0) = %d, NUM_PER_TH = %d, local_abs_max = %f\n",i,item.get_local_id(0),NUM_PER_TH,local_abs_max);
-    //sycl::ext::oneapi::experimental::printf("watch log .......\n");
-    //reinterpret_cast<sycl::vec<unsigned char, 4>(&)[NUM_PER_TH]>(qvals)[0] = reinterpret_cast<sycl::vec<unsigned char, 4>*>(A)[i / NUM_PER_TH];
-    item.barrier();
     auto local_src = &(A[i]);
-    #pragma unroll //NUM_PER_TH
+
+    //TODO: change to vectorize
+    #pragma unroll NUM_PER_TH
     for (int lt = 0; lt < NUM_PER_TH; lt++) {
       if (local_idx + lt < valid_items_load) {
         qvals[lt] = local_src[local_idx + lt];
-      //sycl::ext::oneapi::experimental::printf("blockload: item.get_local_id(0) = %d, local_src[%d] = %hhu, qvals[%d] = %hhu\n",item.get_local_id(0), (item.get_local_id(0) * NUM_PER_TH + lt), (uint8_t)local_src[item.get_local_id(0) * NUM_PER_TH + lt],lt,(uint8_t)qvals[lt]);
       } else {
         qvals[lt] = (unsigned char)0;
-      //sycl::ext::oneapi::experimental::printf("blockload default qvals[%d] = %b\n",lt,qvals[lt]);
       }
     }
+
     switch (DATA_TYPE)
     {
         case General8bit:
-          // load code through read-only cache via __ldg
-          //sycl::ext::oneapi::experimental::printf("this is General8bit ...\n");
-          #pragma unroll //NUM_PER_TH
+          #pragma unroll NUM_PER_TH
           for(int j = 0; j < NUM_PER_TH; j++)
             vals[j] = code[qvals[j]]*local_abs_max;
           break;
@@ -257,44 +153,29 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
         //  }
           break;
         case NF4:
-          #pragma unroll //NUM_PER_TH
+          #pragma unroll NUM_PER_TH
           for(int j = 0; j < NUM_PER_TH; j++)
           {
             vals[j*2] = dDequantizeNF4(qvals[j] >> 4)* local_abs_max;
-
-            //sycl::ext::oneapi::experimental::printf("qvals[%d] = %hhu, qvals[%d] >> 4 = %hhu, dDequantizeNF4(qvals[j] >> 4) = %f, local_abs_max = %f, vals[%d] = %f\n",j, (uint8_t)(qvals[j]), j, (uint8_t)(qvals[j] >> 4), dDequantizeNF4(qvals[j] >> 4), local_abs_max, j*2, vals[j*2]);
-
             vals[j*2 + 1] = dDequantizeNF4(qvals[j] & 0x0F)* local_abs_max;
-
-            //sycl::ext::oneapi::experimental::printf("qvals[%d] = %hhu, qvals[%d] & 0x0F = %hhu, dDequantizeNF4(qvals[j] & 0x0F) = %f, local_abs_max = %f, vals[%d] = %f\n",j,(uint8_t)(qvals[j]),j,(uint8_t) (qvals[j] & 0x0F), dDequantizeNF4(qvals[j] & 0x0F), local_abs_max, j*2+1, vals[j*2+1]);
           }
           break;
     }
 
-    //reinterpret_cast<sycl::vec<float, 4>*>(out)[((DATA_TYPE > 0) ? i * 2 : i + local_idx * 2) / NUM_PER_TH * 2] = reinterpret_cast<sycl::vec<float, 4>*>(vals)[NUM_PER_TH * 2];
-    item.barrier();
     auto local_dst = &(out[(DATA_TYPE > 0) ? i * 2 : i]);
-    if(DATA_TYPE > 0){
-        #pragma unroll //NUM_PER_TH
-        for (int lt = 0; lt < NUM_PER_TH * 2 ; lt++) {
-          if (lt < valid_items_store) {
-            local_dst[local_idx * 2 + lt] = vals[lt];
-            //sycl::ext::oneapi::experimental::printf("blockstore: item.get_local_id(0) = %d, vals[%d] = %f, local_dst[%d] = %f\n",item.get_local_id(0), lt, (T)vals[lt], (item.get_local_id(0) * NUM_PER_TH * 2 + lt), local_dst[item.get_local_id(0) * NUM_PER_TH * 2 + lt]);
-          }
-        }
-    } else {
-        #pragma unroll //NUM_PER_TH
-        for (int lt = 0; lt < NUM_PER_TH; lt++) {
-          if (lt < valid_items_store) {
-            local_dst[local_idx + lt] = vals[lt];
-            //sycl::ext::oneapi::experimental::printf("blockstore: item.get_local_id(0) = %d, vals[%d] = %f, local_dst[%d] = %f\n",item.get_local_id(0), lt, (T)vals[lt], (item.get_local_id(0) * NUM_PER_TH * 2 + lt), local_dst[item.get_local_id(0) * NUM_PER_TH * 2 + lt]);
-          }
-        }
+    int dst_size = (DATA_TYPE > 0) ? NUM_PER_TH * 2 : NUM_PER_TH;
+    int dst_idx = (DATA_TYPE > 0) ? local_idx * 2 : local_idx;
+
+    //TODO: change to vectorize
+    #pragma unroll NUM_PER_TH
+    for (int lt = 0; lt < dst_size ; lt++) {
+      if (lt < valid_items_store) {
+        local_dst[dst_idx + lt] = vals[lt];
+      }
     }
+
   }
 }
-
-#endif
 
 #define num_values_4bit 32
 template <typename T, int THREADS, int BITS, int SUBG_SIZE>

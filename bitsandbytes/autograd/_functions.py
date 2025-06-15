@@ -451,7 +451,7 @@ def matmul_4bit(
     #    else:
     #        return MatMul4Bit.apply(A, B, out, bias, quant_state)
     import pdb
-    pdb.set_trace()
+    #pdb.set_trace()
     #print("A.shape = ",A.shape)
     if A.numel() == A.shape[-1] and A.requires_grad == False and A.device.type != "hpu":
         #pdb.set_trace()
@@ -461,7 +461,7 @@ def matmul_4bit(
             )
             return MatMul4Bit.apply(A, B, out, bias, quant_state)
         else:
-            out = F.gemv_4bit(A, B.t(), out, state=quant_state)
+            out = F.gemv_4bit(A, B, out, state=quant_state)
             if bias is not None:
                 out += bias
             return out
