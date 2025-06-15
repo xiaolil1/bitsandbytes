@@ -20,6 +20,7 @@ from tests.helpers import (
 )
 
 import pdb
+import time
 
 torch.set_printoptions(precision=5, sci_mode=False, linewidth=120, edgeitems=20, threshold=10000)
 #k = 20
@@ -44,9 +45,10 @@ class TestQuantize4Bit:
         qa, SA = F.quantize_4bit(A1, blocksize=blocksize, quant_type=quant_type)
         #pdb.set_trace()
         A2 = F.dequantize_4bit(qa, SA, blocksize=blocksize, quant_type=quant_type)
-        #print("A1 = ", A1)
-        #print("A2 = ", A2)
+        #print("A1[0] = ", A1[0])
+        #print("A2[0] = ", A2[0])
         #pdb.set_trace()
+        #torch.xpu.synchronize() 
 
         err = (A1 - A2).abs().float()
         relerr = (err / (A1.abs().float() + 1e-8)).mean()
@@ -98,7 +100,7 @@ class TestQuantize4Bit:
 
         # Large number of iterations is excessive and slow on CPU.
         # Keep for CUDA for now.
-        iters = 1 if device == "cuda" else 10
+        iters = 1 #if device == "cuda" else 10
 
         for i in range(iters):
             #pdb.set_trace()

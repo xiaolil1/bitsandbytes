@@ -25,7 +25,7 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
         workgroup_size,
         num_per_th,
         DATA_TYPE> kfn(code, A, absmax, out, blocksize / 2, n);
-    sycl_kernel_submit<decltype(kfn), 1>(sycl::nd_range<1>(sycl::range<1>(global_range), sycl::range<1>(local_range)), queue, kfn);
+    sycl_kernel_submit<decltype(kfn), 1, 32>(sycl::nd_range<1>(sycl::range<1>(global_range), sycl::range<1>(local_range)), queue, kfn);
   } else {
 	  //std::cout<<"log2 ...\n";
   const int workgroup_num = (n + tile_size - 1) / tile_size;
@@ -37,7 +37,7 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
         workgroup_size,
         num_per_th,
         DATA_TYPE> kfn(code, A, absmax, out, blocksize, n);
-    sycl_kernel_submit<decltype(kfn), 1>(sycl::nd_range<1>(sycl::range<1>(global_range), sycl::range<1>(local_range)), queue, kfn);
+    sycl_kernel_submit<decltype(kfn), 1, 32>(sycl::nd_range<1>(sycl::range<1>(global_range), sycl::range<1>(local_range)), queue, kfn);
   }
 }
 
@@ -65,7 +65,7 @@ template <typename T, int BITS> void gemm_4bit_inference(int m, int n, int k, T 
 
   kgemm_4bit_inference<T, THREADS, BITS, SUBG_SIZE> kfn(m,  n,  k, A,  B, absmax, datatype, out, lda, ldb, ldc, blocksize);
 
-  sycl_comp_kernel_submit<decltype(kfn), 1>(sycl::nd_range<1>(sycl::range<1>(workgroup_size * workgroup_num), sycl::range<1>(workgroup_size)), queue, kfn);
+  sycl_comp_kernel_submit<decltype(kfn), 1, 32>(sycl::nd_range<1>(sycl::range<1>(workgroup_size * workgroup_num), sycl::range<1>(workgroup_size)), queue, kfn);
 }
 
 //==============================================================
