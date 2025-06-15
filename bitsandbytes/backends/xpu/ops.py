@@ -38,31 +38,18 @@ def _dequantize_4bit_impl(
         #if quant_type == "fp4":
         #    lib.cdequantize_blockwise_bf16_fp4(*args)
         #else:
-            #print("before lib.cdequantize_blockwise_bf16_nf4")
-            #pdb.set_trace()
             lib.cdequantize_blockwise_bf16_nf4(*args)
-            #pdb.set_trace()
-            #print("after lib.cdequantize_blockwise_bf16_nf4")
     elif dtype == torch.float16:
         #if quant_type == "fp4":
         #    lib.cdequantize_blockwise_fp16_fp4(*args)
         #else:
-            #print("before lib.cdequantize_blockwise_fp16_nf4")
-            #pdb.set_trace()
             lib.cdequantize_blockwise_fp16_nf4(*args)
-            #pdb.set_trace()
-            #print("after lib.cdequantize_blockwise_fp16_nf4")
-            #pdb.set_trace()
     elif dtype == torch.float32:
         #if quant_type == "fp4":
         #    lib.cdequantize_blockwise_fp32_fp4(*args)
         #else:
-            #print("before lib.cdequantize_blockwise_fp32_nf4")
-            #pdb.set_trace()
             lib.cdequantize_blockwise_fp32_nf4(*args)
-            #pdb.set_trace()
             #lib.ctest(*args)
-            #print("after lib.cdequantize_blockwise_fp32_nf4")
 
 @register_kernel("bitsandbytes::dequantize_4bit", "xpu")
 def _(
@@ -117,7 +104,6 @@ def _dequantize_blockwise_impl(
         ct.c_int(A.numel()),
         _get_tensor_stream(A),
     )
-    #pdb.set_trace()
     if dtype == torch.float16:
         lib.cdequantize_blockwise_fp16(*args)
     elif dtype == torch.bfloat16:
@@ -131,9 +117,7 @@ def _(
 ) -> torch.Tensor:
     shape = (*A.shape[:-1], shapeB[0])
     out = torch.empty(shape, device=A.device, dtype=A.dtype)
-    #pdb.set_trace()
     _gemv_4bit_impl(A, B, shapeB, absmax, code, blocksize, out=out)
-    #pdb.set_trace()
     return out
 
 
