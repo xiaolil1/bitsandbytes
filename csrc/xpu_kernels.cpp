@@ -101,7 +101,6 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
     THREADS,
     NUM_PER_TH,
     DATA_TYPE>::operator()(sycl::nd_item<1> item) const {
-//sycl::ext::oneapi::experimental::printf("log 0 ...\n");
   const int base_idx = (item.get_group(0) * TILE_SIZE);
   size_t local_idx = item.get_local_id(0) * NUM_PER_TH;	    
   float local_abs_max = -FLT_MAX;
@@ -127,36 +126,9 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
     local_abs_max = absmax[(i + local_idx)  >> (31 - std::countl_zero<unsigned int>(blocksize))];
 
     auto local_src = &(A[i]);
-    //TODO: change to vectorize
-#if 0    
-    #pragma unroll NUM_PER_TH
-    for (int lt = 0; lt < NUM_PER_TH; lt++) {
-      if (local_idx + lt < valid_items_load) {
-        qvals[lt] = local_src[local_idx + lt];
-      } else {
-        qvals[lt] = (unsigned char)0;
-      }
-    }
-#endif    
     if (local_idx + NUM_PER_TH < valid_items_load) {
-//sycl::ext::oneapi::experimental::printf("log 1 ...\n");
-/*
-unsigned char local_B_4bit[num_values_8bit];
-if((inner_idx_halved + num_values_8bit) < (K/2))
-{
-  // this is the most important for performance considerations
-  reinterpret_cast<sycl::vec<int, 4>(&)[num_values_8bit]>(local_B_4bit)[0] = reinterpret_cast<sycl::vec<int, 4>*>(B)[(offset_B+(inner_idx_halved))/(num_values_8bit)];
-}*/
-        //uint8_t qvals[NUM_PER_TH];
-        //reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>*>(qvals) = reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>*>(local_src[local_idx + NUM_PER_TH]);
-        //*(sycl::vec<uint8_t, NUM_PER_TH>*)qvals[0] = *(sycl::vec<uint8_t, NUM_PER_TH>*)(local_src[local_idx]);
 	reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>(&)[NUM_PER_TH]>(qvals)[0] = reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>*>(A)[(i + local_idx) / NUM_PER_TH];
-	//reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>(&)>(qvals) = reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>*>(A)[i + local_idx];
-	//sycl::vec<uint8_t, NUM_PER_TH> qvals_vec;
-	//qvals_vec = (reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>*>(A)[i + NUM_PER_TH]);
-	//qvals = reinterpret_cast<(&)[NUM_PER_TH]>(qvals_vec);
     } else {
-//sycl::ext::oneapi::experimental::printf("log 2 ...\n");
         #pragma unroll NUM_PER_TH
         for (int lt = 0; lt < NUM_PER_TH; lt++) {
           if (local_idx + lt < valid_items_load) {
@@ -167,7 +139,6 @@ if((inner_idx_halved + num_values_8bit) < (K/2))
         }        	    
     }   
 
-//sycl::ext::oneapi::experimental::printf("log 3 ...\n");
     switch (DATA_TYPE)
     {
         case General8bit:
@@ -197,17 +168,7 @@ if((inner_idx_halved + num_values_8bit) < (K/2))
     auto local_dst = &(out[(DATA_TYPE > 0) ? i * 2 : i]);
     const int local_dst_size = (DATA_TYPE > 0) ? NUM_PER_TH * 2 : NUM_PER_TH;
     int local_dst_idx = (DATA_TYPE > 0) ? local_idx * 2 : local_idx;
-#if 0
-    //TODO: change to vectorize
-    #pragma unroll NUM_PER_TH
-    for (int lt = 0; lt < dst_size ; lt++) {
-      if (lt < valid_items_store) {
-        local_dst[dst_idx + lt] = vals[lt];
-      }
-    }
-#endif
     if(local_dst_size < valid_items_store) {
-	//reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>(&)[NUM_PER_TH]>(qvals)[0] = reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>*>(A)[(i + local_idx) / NUM_PER_TH];
         reinterpret_cast<sycl::vec<T, local_dst_size>*>(out)[(((DATA_TYPE > 0) ? i * 2 : i) + local_dst_idx) / local_dst_size] = reinterpret_cast<sycl::vec<T, local_dst_size>(&)[local_dst_size]>(vals)[0];
     } else {
         #pragma unroll NUM_PER_TH
