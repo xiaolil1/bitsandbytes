@@ -194,7 +194,14 @@ elseif(BUILD_XPU)
     add_compile_definitions(BUILD_XPU)
     set(CMAKE_C_COMPILER icx)
     set(CMAKE_CXX_COMPILER icpx)
-    #message(STATUS "CMAKE_CXX_COMPILER: ${CMAKE_CXX_COMPILER}")
+
+    find_program(CLANG_FORMAT clang-format-12)
+    if(CLANG_FORMAT)
+           add_custom_target(format ALL
+                   COMMAND ${CLANG_FORMAT} -i csrc/xpu_ops.cpp csrc/xpu_ops.h csrc/xpu_kernels.cpp csrc/xpu_kernels.h
+                   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                   COMMENT "Formatting xpu source files with clang-format-12")
+    endif()
 else()
     string(APPEND BNB_OUTPUT_NAME "_cpu")
     set(GPU_SOURCES)
@@ -229,11 +236,8 @@ if(BUILD_MPS)
     target_link_libraries(bitsandbytes objc "-framework Foundation" "-framework Metal" "-framework MetalPerformanceShaders" "-framework MetalPerformanceShadersGraph")
 endif()
 if(BUILD_XPU)
-    set(SYCL_LINK_FLAGS "-fsycl;-fsycl-max-parallel-link-jobs=48;--offload-compress;-fsycl-targets=spir64_gen,spir64;-flink-huge-device-code;-Xs;-device pvc,xe-lpg,ats-m150 -options ' -cl-intel-enable-auto-large-GRF-mode -cl-poison-unsupported-fp64-kernels -cl-intel-greater-than-4GB-buffer-required'")
-    set(SYCL_COMPILE_FLAGS "-fsycl;-fhonor-nans;-fhonor-infinities;-fno-associative-math;-fno-approx-func;-fno-sycl-instrument-device-code;-fsycl-max-parallel-link-jobs=48;--offload-compress;-fsycl-targets=spir64_gen,spir64;-flink-huge-device-code")
-
-    #message(STATUS "SYCL_COMPILE_FLAGS ${SYCL_COMPILE_FLAGS}")
-    #message(STATUS "SYCL_LINK_FLAGS ${SYCL_LINK_FLAGS}")
+    set(SYCL_LINK_FLAGS "-fsycl;--offload-compress;-fsycl-targets=spir64_gen,spir64;-Xs;-device pvc,xe-lpg,ats-m150 -options ' -cl-intel-enable-auto-large-GRF-mode -cl-poison-unsupported-fp64-kernels -cl-intel-greater-than-4GB-buffer-required'")
+    set(SYCL_COMPILE_FLAGS "-fsycl;-fhonor-nans;-fhonor-infinities;-fno-associative-math;-fno-approx-func;-fno-sycl-instrument-device-code;--offload-compress;-fsycl-targets=spir64_gen,spir64;")
 
     target_link_libraries(bitsandbytes PUBLIC ${SYCL_LIBRARY})
     target_include_directories(bitsandbytes PUBLIC ${SYCL_INCLUDE_DIR})
