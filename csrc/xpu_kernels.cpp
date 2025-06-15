@@ -1,5 +1,4 @@
 #include "xpu_kernels.h"
-//#include "xpu_common.h"
 #include <iostream>
 #include <cmath>
 #include <unistd.h>
@@ -92,13 +91,11 @@ inline float dDequantizeNF4(unsigned char val)
 template <
     typename T,
     int TILE_SIZE,
-    int THREADS,
     int NUM_PER_TH,
     int DATA_TYPE>
 SYCL_EXTERNAL void kDequantizeBlockwise<
     T,
     TILE_SIZE,
-    THREADS,
     NUM_PER_TH,
     DATA_TYPE>::operator()(sycl::nd_item<1> item) const {
   const int base_idx = (item.get_group(0) * TILE_SIZE);
@@ -110,69 +107,68 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
   uint8_t qvals[NUM_PER_TH]; // quantized data
   T vals[NUM_PER_TH*((DATA_TYPE > 0) ? 2 : 1)]; // dequantized data
 						
-    int i = base_idx;
-    if (DATA_TYPE > 0) {
-      valid_items_load = sycl::min(TILE_SIZE, (n + 1) / 2 - i);
-      valid_items_store = sycl::min(TILE_SIZE * 2, n - i * 2);
-    } else {
-      valid_items_load = sycl::min(TILE_SIZE, n - i);
-      valid_items_store = valid_items_load;
-    }
+  if (DATA_TYPE > 0) {
+    valid_items_load = sycl::min(TILE_SIZE, (n + 1) / 2 - base_idx);
+    valid_items_store = sycl::min(TILE_SIZE * 2, n - base_idx * 2);
+  } else {
+    valid_items_load = sycl::min(TILE_SIZE, n - base_idx);
+    valid_items_store = valid_items_load;
+  }
 
-    // Avoid expensive divsion by the blocksize (as blocksize will always be a power-of-2)
-    local_abs_max = absmax[(i + local_idx) >> (31 - std::countl_zero<unsigned int>(blocksize))];
+  // Avoid expensive divsion by the blocksize (as blocksize will always be a power-of-2)
+  local_abs_max = absmax[(base_idx + local_idx) >> (31 - std::countl_zero<unsigned int>(blocksize))];
 
-    if (local_idx + NUM_PER_TH < valid_items_load) {
-	reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>(&)[NUM_PER_TH]>(qvals)[0] = reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>*>(A)[(i + local_idx) / NUM_PER_TH];
-    } else {
-        #pragma unroll NUM_PER_TH
-        for (int lt = 0; lt < NUM_PER_TH; lt++) {
-          if (local_idx + lt < valid_items_load) {
-            qvals[lt] = A[i + local_idx + lt];
-          } else {
-            qvals[lt] = (uint8_t)0;
-          }
-        }        	    
-    }   
-
-    switch (DATA_TYPE)
-    {
-        case General8bit:
-          #pragma unroll NUM_PER_TH
-          for(int j = 0; j < NUM_PER_TH; j++)
-            vals[j] = code[qvals[j]]*local_abs_max;
-          break;
-        case FP4:
-        //TODO: check FP4 quant table with bitsandbytes/backends/utils.py, maybe not compitable.
-        //  #pragma unroll NUM_PER_TH
-        //  for(int j = 0; j < NUM_PER_TH; j++)
-        //  {
-        //    vals[j*2] = dDequantizeFP4Tree(qvals[j] >> 4, local_abs_max);
-        //    vals[j*2 + 1] = dDequantizeFP4Tree(qvals[j] & 0x0F, local_abs_max);
-        //  }
-          break;
-        case NF4:
-          #pragma unroll NUM_PER_TH
-          for(int j = 0; j < NUM_PER_TH; j++)
-          {
-            vals[j*2] = dDequantizeNF4(qvals[j] >> 4)* local_abs_max;
-            vals[j*2 + 1] = dDequantizeNF4(qvals[j] & 0x0F)* local_abs_max;
-          }
-          break;
-    }
-
-    const int local_dst_size = (DATA_TYPE > 0) ? NUM_PER_TH * 2 : NUM_PER_TH;
-    int local_dst_idx = (DATA_TYPE > 0) ? local_idx * 2 : local_idx;
-    if(local_dst_size < valid_items_store) {
-        reinterpret_cast<sycl::vec<T, local_dst_size>*>(out)[(((DATA_TYPE > 0) ? i * 2 : i) + local_dst_idx) / local_dst_size] = reinterpret_cast<sycl::vec<T, local_dst_size>(&)[local_dst_size]>(vals)[0];
-    } else {
-        #pragma unroll NUM_PER_TH
-        for (int lt = 0; lt < local_dst_size ; lt++) {
-          if (lt < valid_items_store) {
-            out[((DATA_TYPE > 0) ? i * 2 : i) + local_dst_idx + lt] = vals[lt];
-          }
+  if (local_idx + NUM_PER_TH < valid_items_load) {
+      reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>(&)[NUM_PER_TH]>(qvals)[0] = reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>*>(A)[(base_idx + local_idx) / NUM_PER_TH];
+  } else {
+      #pragma unroll NUM_PER_TH
+      for (int i = 0; i < NUM_PER_TH; i++) {
+        if (local_idx + i < valid_items_load) {
+          qvals[i] = A[base_idx + local_idx + i];
+        } else {
+          qvals[i] = (uint8_t)0;
         }
-    }
+      }        	    
+  }   
+
+  switch (DATA_TYPE)
+  {
+      case General8bit:
+        #pragma unroll NUM_PER_TH
+        for(int j = 0; j < NUM_PER_TH; j++)
+          vals[j] = code[qvals[j]]*local_abs_max;
+        break;
+      case FP4:
+      //TODO: check FP4 quant table with bitsandbytes/backends/utils.py, maybe not compitable.
+      //  #pragma unroll NUM_PER_TH
+      //  for(int j = 0; j < NUM_PER_TH; j++)
+      //  {
+      //    vals[j*2] = dDequantizeFP4Tree(qvals[j] >> 4, local_abs_max);
+      //    vals[j*2 + 1] = dDequantizeFP4Tree(qvals[j] & 0x0F, local_abs_max);
+      //  }
+        break;
+      case NF4:
+        #pragma unroll NUM_PER_TH
+        for(int j = 0; j < NUM_PER_TH; j++)
+        {
+          vals[j*2] = dDequantizeNF4(qvals[j] >> 4)* local_abs_max;
+          vals[j*2 + 1] = dDequantizeNF4(qvals[j] & 0x0F)* local_abs_max;
+        }
+        break;
+  }
+
+  const int local_dst_size = (DATA_TYPE > 0) ? NUM_PER_TH * 2 : NUM_PER_TH;
+  int local_dst_idx = (DATA_TYPE > 0) ? local_idx * 2 : local_idx;
+  if(local_dst_size < valid_items_store) {
+      reinterpret_cast<sycl::vec<T, local_dst_size>*>(out)[(((DATA_TYPE > 0) ? base_idx * 2 : base_idx) + local_dst_idx) / local_dst_size] = reinterpret_cast<sycl::vec<T, local_dst_size>(&)[local_dst_size]>(vals)[0];
+  } else {
+      #pragma unroll NUM_PER_TH
+      for (int i = 0; i < local_dst_size ; i++) {
+        if (i < valid_items_store) {
+          out[((DATA_TYPE > 0) ? base_idx * 2 : base_idx) + local_dst_idx + i] = vals[i];
+        }
+      }
+  }
 }
 
 #define num_values_4bit 32
@@ -291,41 +287,17 @@ SYCL_EXTERNAL void kgemm_4bit_inference<T, THREADS, BITS, SUBG_SIZE>::operator()
 //                   TEMPLATE DEFINITIONS
 //==============================================================
 
-template class kDequantizeBlockwise<sycl::half, 512, 64, 8, FP4>;
-template class kDequantizeBlockwise<sycl::half, 512, 64, 8, General8bit>;
-template class kDequantizeBlockwise<sycl::half, 512, 64, 8, NF4>;
+template class kDequantizeBlockwise<sycl::half, 512, 4, FP4>;
+template class kDequantizeBlockwise<sycl::half, 512, 4, General8bit>;
+template class kDequantizeBlockwise<sycl::half, 512, 4, NF4>;
 
-template class kDequantizeBlockwise<float, 512, 64, 8, FP4>;
-template class kDequantizeBlockwise<float, 512, 64, 8, General8bit>;
-template class kDequantizeBlockwise<float, 512, 64, 8, NF4>;
+template class kDequantizeBlockwise<float, 512, 4, FP4>;
+template class kDequantizeBlockwise<float, 512, 4, General8bit>;
+template class kDequantizeBlockwise<float, 512, 4, NF4>;
 
-template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 64, 8, FP4>;
-template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 64, 8, General8bit>;
-template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 64, 8, NF4>;
-
-template class kDequantizeBlockwise<sycl::half, 512, 128, 4, FP4>;
-template class kDequantizeBlockwise<sycl::half, 512, 128, 4, General8bit>;
-template class kDequantizeBlockwise<sycl::half, 512, 128, 4, NF4>;
-
-template class kDequantizeBlockwise<float, 512, 128, 4, FP4>;
-template class kDequantizeBlockwise<float, 512, 128, 4, General8bit>;
-template class kDequantizeBlockwise<float, 512, 128, 4, NF4>;
-
-template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 128, 4, FP4>;
-template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 128, 4, General8bit>;
-template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 128, 4, NF4>;
-
-template class kDequantizeBlockwise<sycl::half, 512, 256, 2, FP4>;
-template class kDequantizeBlockwise<sycl::half, 512, 256, 2, General8bit>;
-template class kDequantizeBlockwise<sycl::half, 512, 256, 2, NF4>;
-
-template class kDequantizeBlockwise<float, 512, 256, 2, FP4>;
-template class kDequantizeBlockwise<float, 512, 256, 2, General8bit>;
-template class kDequantizeBlockwise<float, 512, 256, 2, NF4>;
-
-template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 256, 2, FP4>;
-template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 256, 2, General8bit>;
-template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 256, 2, NF4>;
+template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 4, FP4>;
+template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 4, General8bit>;
+template class kDequantizeBlockwise<sycl::ext::oneapi::bfloat16, 512, 4, NF4>;
 
 template class kgemm_4bit_inference<sycl::half, 128, 16, 32>;
 template class kgemm_4bit_inference<sycl::ext::oneapi::bfloat16, 128, 16, 32>;

@@ -1,5 +1,5 @@
 #include <common.h>
-#include "xpu_ops.h"
+#include <xpu_ops.h>
 #include <xpu_kernels.h>
 
 template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsigned char *A, float *absmax, T *out, int blocksize/*block-quant-size*/, const int n, sycl::queue* stream)
@@ -8,7 +8,6 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
   const int workgroup_size = 128;
   const int num_per_th = 4;
   const int tile_size = workgroup_size * num_per_th;
-  //std::cout<<"workgroup_num = "<<workgroup_num<<" tile_size = "<<tile_size<<" workgroup_size = "<<workgroup_size<<" num_per_th = "<<num_per_th<<" blocksize = "<<blocksize<<std::endl;
   if(DATA_TYPE > 0){
   const int workgroup_num = (n + tile_size - 1) / tile_size / 2;
   sycl::range<1> local_range{(size_t)workgroup_size};
@@ -16,7 +15,6 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
     kDequantizeBlockwise<
         T,
         tile_size,
-        workgroup_size,
         num_per_th,
         DATA_TYPE> kfn(code, A, absmax, out, blocksize / 2, n);
     sycl_kernel_submit<decltype(kfn), 1, 32>(sycl::nd_range<1>(sycl::range<1>(global_range), sycl::range<1>(local_range)), queue, kfn);
@@ -27,7 +25,6 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
     kDequantizeBlockwise<
         T,
         tile_size,
-        workgroup_size,
         num_per_th,
         DATA_TYPE> kfn(code, A, absmax, out, blocksize, n);
     sycl_kernel_submit<decltype(kfn), 1, 32>(sycl::nd_range<1>(sycl::range<1>(global_range), sycl::range<1>(local_range)), queue, kfn);

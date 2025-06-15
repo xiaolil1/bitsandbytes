@@ -10,7 +10,6 @@
 #include <functional>
 
 #include <sycl/sycl.hpp>
-//#include <CL/sycl.hpp>
 
 template <typename ker_t, int dim, int subgroup_size>
 static inline void sycl_kernel_submit(
@@ -21,8 +20,6 @@ static inline void sycl_kernel_submit(
     cgh.parallel_for<ker_t>(range, ker);
   };
   q.submit(cgf);
-  //TODO: Just for debug log print, will be removed.
-  //q.wait();
 }
 
 template <typename ker_t, int dim, int subgroup_size>
@@ -35,8 +32,6 @@ static inline void sycl_comp_kernel_submit(
     cgh.parallel_for<ker_t>(range, ker);
   };
   q.submit(cgf);
-  //TODO: Just for debug log print, will be removed.
-  //q.wait();
 }
 
 typedef enum DataType_t

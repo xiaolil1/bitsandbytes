@@ -7,7 +7,6 @@
 template <
     typename T,
     int TILE_SIZE,
-    int THREADS,
     int NUM_PER_TH,
     int DATA_TYPE>
 class kDequantizeBlockwise {
