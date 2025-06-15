@@ -36,8 +36,8 @@ def assert_all_approx_close(a, b, rtol=1e-3, atol=1e-3, count=0, throw=True):
 
 class TestQuantize4Bit:
     @pytest.mark.parametrize("device", ["xpu"]) #get_available_devices())
-    @pytest.mark.parametrize("dtype", [torch.float32], ids=describe_dtype) #, torch.float16, torch.bfloat16], ids=describe_dtype)
-    @pytest.mark.parametrize("quant_type", ["nf4"]) #["fp4", "nf4"])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16], ids=describe_dtype)
+    @pytest.mark.parametrize("quant_type", ["nf4"]) #"fp4", "nf4"])
     @pytest.mark.parametrize("blocksize", [64, 128, 256, 512, 1024, 2048, 4096])
     def test_4bit_quant(self, device, dtype, quant_type, blocksize):
         A1 = torch.randn(1024, 512, device=device, dtype=dtype)
@@ -75,9 +75,9 @@ class TestQuantize4Bit:
             assert err.item() < math.log2(blocksize) * 8e-2
 
     @pytest.mark.parametrize("device", ["xpu"])#get_available_devices())
-    #@pytest.mark.parametrize("double_quant", TRUE_FALSE, ids=lambda double_quant: f"DQ_{double_quant}")
+    @pytest.mark.parametrize("double_quant", TRUE_FALSE, ids=lambda double_quant: f"DQ_{double_quant}")
     #@pytest.mark.parametrize("double_quant", [True], ids=lambda double_quant: f"DQ_{double_quant}")
-    @pytest.mark.parametrize("double_quant", [True], ids=lambda double_quant: f"DQ_{double_quant}")
+    #@pytest.mark.parametrize("double_quant", [True], ids=lambda double_quant: f"DQ_{double_quant}")
     @pytest.mark.parametrize("storage_type", ["nf4"]) #, "fp4"])
     @pytest.mark.parametrize("kind", ["fc1", "fc2", "attn"])#, "attn_packed"])
     @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32], ids=describe_dtype)

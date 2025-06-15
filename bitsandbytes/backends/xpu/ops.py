@@ -35,21 +35,20 @@ def _dequantize_4bit_impl(
     )
 
     if dtype == torch.bfloat16:
-        #if quant_type == "fp4":
-        #    lib.cdequantize_blockwise_bf16_fp4(*args)
-        #else:
+        if quant_type == "fp4":
+            lib.cdequantize_blockwise_bf16_fp4(*args)
+        else:
             lib.cdequantize_blockwise_bf16_nf4(*args)
     elif dtype == torch.float16:
-        #if quant_type == "fp4":
-        #    lib.cdequantize_blockwise_fp16_fp4(*args)
-        #else:
+        if quant_type == "fp4":
+            lib.cdequantize_blockwise_fp16_fp4(*args)
+        else:
             lib.cdequantize_blockwise_fp16_nf4(*args)
     elif dtype == torch.float32:
-        #if quant_type == "fp4":
-        #    lib.cdequantize_blockwise_fp32_fp4(*args)
-        #else:
+        if quant_type == "fp4":
+            lib.cdequantize_blockwise_fp32_fp4(*args)
+        else:
             lib.cdequantize_blockwise_fp32_nf4(*args)
-            #lib.ctest(*args)
 
 @register_kernel("bitsandbytes::dequantize_4bit", "xpu")
 def _(

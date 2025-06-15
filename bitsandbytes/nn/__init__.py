@@ -18,9 +18,9 @@ from .modules import (
     StableEmbedding,
     SwitchBackLinearBnb,
 )
-#from .triton_based_modules import (
-#    StandardLinear,
-#    SwitchBackLinear,
-#    SwitchBackLinearGlobal,
-#    SwitchBackLinearVectorwise,
-#)
+from .triton_based_modules import (
+    StandardLinear,
+    SwitchBackLinear,
+    SwitchBackLinearGlobal,
+    SwitchBackLinearVectorwise,
+)
