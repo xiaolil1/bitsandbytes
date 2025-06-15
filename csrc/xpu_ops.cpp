@@ -4,18 +4,12 @@
 
 template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsigned char *A, float *absmax, T *out, int blocksize/*block-quant-size*/, const int n, sycl::queue* stream)
 {
-  //std::cout<<"this is dequantizeBlockwise \n";
   auto& queue = *stream;
-  //__builtin_trap();
   const int workgroup_size = 128;
   const int num_per_th = 4;
   const int tile_size = workgroup_size * num_per_th;
-  //const int workgroup_num = (n + tile_size - 1) / tile_size; // / 2;
-  //sycl::range<1> local_range{(size_t)workgroup_size};
-  //sycl::range<1> global_range{(size_t)workgroup_num * (size_t)workgroup_size};
   //std::cout<<"workgroup_num = "<<workgroup_num<<" tile_size = "<<tile_size<<" workgroup_size = "<<workgroup_size<<" num_per_th = "<<num_per_th<<" blocksize = "<<blocksize<<std::endl;
   if(DATA_TYPE > 0){
-	  //std::cout<<"log1 ...\n";
   const int workgroup_num = (n + tile_size - 1) / tile_size / 2;
   sycl::range<1> local_range{(size_t)workgroup_size};
   sycl::range<1> global_range{(size_t)workgroup_num * (size_t)workgroup_size};
@@ -27,7 +21,6 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
         DATA_TYPE> kfn(code, A, absmax, out, blocksize / 2, n);
     sycl_kernel_submit<decltype(kfn), 1, 32>(sycl::nd_range<1>(sycl::range<1>(global_range), sycl::range<1>(local_range)), queue, kfn);
   } else {
-	  //std::cout<<"log2 ...\n";
   const int workgroup_num = (n + tile_size - 1) / tile_size;
   sycl::range<1> local_range{(size_t)workgroup_size};
   sycl::range<1> global_range{(size_t)workgroup_num * (size_t)workgroup_size};
@@ -44,17 +37,7 @@ template<typename T, int DATA_TYPE> void dequantizeBlockwise(float *code, unsign
 template <typename T, int BITS> void gemm_4bit_inference(int m, int n, int k, T * A,  unsigned char* B,  float *absmax, float *datatype, T * out,  int lda, int ldb, int ldc, int blocksize, sycl::queue* stream)
 {
 
-  //int num_blocks = (m+3)/4;
-  //std::cout<<"this is gemm_4bit_inference \n";
   auto& queue = *stream;
-
-//TODO: subgroup_size dispatch ... gpu/aten/operators/SortingDeviceRadixSort.h
-  //auto device = queue.get_device();
-  //auto subgroup_sizes = device.get_info<sycl::info::device::sub_group_sizes>();
-  //size_t workgroup_size = subgroup_sizes * 4;
-//TODO: or set subgroup_size  
-  //h.parallel_for(sycl::nd_range<1>(sycl::range<1>(num_work_items), sycl::range<1>(subgroup_size)),
-  //                     [=](sycl::nd_item<1> it) [[intel::reqd_sub_group_size(subgroup_size)]] {
 
   size_t subgroup_size = 32;
   size_t workgroup_size = subgroup_size * 4;

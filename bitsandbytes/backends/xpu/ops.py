@@ -2,14 +2,11 @@ from collections.abc import Sequence
 import ctypes as ct
 
 import torch
-import pdb
 from bitsandbytes.functional import _get_tensor_stream, get_ptr
 
 from ..._ops import register_kernel
 from ..utils import ipex_xpu
 from ...cextension import lib
-
-import pdb
 
 if torch.__version__ >= (2, 7):
     @register_kernel("bitsandbytes::int8_linear_matmul", "xpu")
@@ -27,9 +24,6 @@ def _dequantize_4bit_impl(
     dtype: torch.dtype,
     out: torch.Tensor,
     ) -> None:
-    import pdb
-    #pdb.set_trace()
-    #print("this is bitsandbytes::_dequantize_4bit_impl ..")
     args = (
         None,
         get_ptr(A),
@@ -40,7 +34,6 @@ def _dequantize_4bit_impl(
         _get_tensor_stream(A),
     )
 
-    #lib.cdequantize_blockwise_fp32_nf4(*args)
     if dtype == torch.bfloat16:
         #if quant_type == "fp4":
         #    lib.cdequantize_blockwise_bf16_fp4(*args)
@@ -80,42 +73,10 @@ def _(
     shape: Sequence[int],
     dtype: torch.dtype,
 ) -> torch.Tensor:
-    #print("this is bitsandbytes::dequantize_4bit ..")
-    import pdb
     out = torch.zeros(shape, dtype=dtype, device=A.device)
-    A_ref = A.clone()
     _dequantize_4bit_impl(A, absmax, blocksize, quant_type, dtype, out=out)
-
-    ##just for kernel porting test, will replace by UT
-    #out_ref = torch.ops.torch_ipex.dequantize_4bit(A_ref, "nf4", shape, absmax, None, blocksize).to(dtype)
-    #max_diff = abs(out - out_ref)
-    #print("max_diff = ", max_diff)
-    #print(out[0])
     return out
 
-#if ipex_xpu: #will be replace by native kernel
-#    @register_kernel("bitsandbytes::dequantize_blockwise", "xpu")
-#    def _(
-#        A: torch.Tensor,
-#        absmax: torch.Tensor,
-#        code: torch.Tensor,
-#        blocksize: int,
-#        dtype: torch.dtype,
-#    ) -> torch.Tensor:
-#        shape = A.shape
-#        out = torch.empty(A.reshape(-1).shape, dtype=dtype, device=A.device)
-#        # void cdequantize_blockwise_fp32(
-#        # float *code, unsigned char *A, float *absmax, float *out, int blocksize, const int n, cudaStream_t stream)
-#        if dtype == torch.float16:
-#            ipex_xpu.xpu.bitsandbytes.cdequantize_blockwise_fp16(code, A, absmax, out, blocksize, A.numel())
-#        elif dtype == torch.bfloat16:
-#            ipex_xpu.xpu.bitsandbytes.cdequantize_blockwise_bf16(code, A, absmax, out, blocksize, A.numel())
-#        elif dtype == torch.float32:
-#            ipex_xpu.xpu.bitsandbytes.cdequantize_blockwise_fp32(code, A, absmax, out, blocksize, A.numel())
-#        else:
-#            raise ValueError(f"Blockwise quantization only supports 16/32-bit floats, but got {out.dtype}")
-#
-#        return out.reshape(shape)
 @register_kernel("bitsandbytes::dequantize_blockwise", "xpu")
 def _(A: torch.Tensor, absmax: torch.Tensor, code: torch.Tensor, blocksize: int, dtype: torch.dtype) -> torch.Tensor:
     out = torch.empty_like(A, dtype=dtype)
@@ -229,9 +190,6 @@ def _gemv_4bit_impl(
 
     stream = _get_tensor_stream(A)
 
-    #print("this is _gemv_4bit_impl ....")
-    #pdb.set_trace()
-
     if A.dtype == torch.float16:
         lib.cgemm_4bit_inference_fp16(
             m,
@@ -280,39 +238,3 @@ def _gemv_4bit_impl(
             ct.c_int32(blocksize),
             stream,
         )
-
-@register_kernel("bitsandbytes::dequantize_nf4_ipex", "xpu")
-def _(
-    A: torch.Tensor,
-    absmax: torch.Tensor,
-    blocksize: int,
-    shape: Sequence[int],
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    import pdb
-    pdb.set_trace()
-    out = torch.ops.torch_ipex.dequantize_4bit(A, "nf4", shape, absmax, None, blocksize).t().to(dtype)
-    return out
-
-@register_kernel("bitsandbytes::dequantize_blockwise_ipex", "xpu")
-def _(
-    A: torch.Tensor,
-    absmax: torch.Tensor,
-    code: torch.Tensor,
-    blocksize: int,
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    shape = A.shape
-    out = torch.empty(A.reshape(-1).shape, dtype=dtype, device=A.device)
-    # void cdequantize_blockwise_fp32(
-    # float *code, unsigned char *A, float *absmax, float *out, int blocksize, const int n, cudaStream_t stream)
-    if dtype == torch.float16:
-        ipex_xpu.xpu.bitsandbytes.cdequantize_blockwise_fp16(code, A, absmax, out, blocksize, A.numel())
-    elif dtype == torch.bfloat16:
-        ipex_xpu.xpu.bitsandbytes.cdequantize_blockwise_bf16(code, A, absmax, out, blocksize, A.numel())
-    elif dtype == torch.float32:
-        ipex_xpu.xpu.bitsandbytes.cdequantize_blockwise_fp32(code, A, absmax, out, blocksize, A.numel())
-    else:
-        raise ValueError(f"Blockwise quantization only supports 16/32-bit floats, but got {out.dtype}")
-
-    return out.reshape(shape)        

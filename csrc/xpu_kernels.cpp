@@ -104,16 +104,13 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
   const int base_idx = (item.get_group(0) * TILE_SIZE);
   size_t local_idx = item.get_local_id(0) * NUM_PER_TH;	    
   float local_abs_max = -FLT_MAX;
-  const int n_load = (item.get_group_range(0) * TILE_SIZE);
   int valid_items_load = 0;
   int valid_items_store = 0;
 
   uint8_t qvals[NUM_PER_TH]; // quantized data
   T vals[NUM_PER_TH*((DATA_TYPE > 0) ? 2 : 1)]; // dequantized data
-						//
-  //TODO: check whether for loop neccessary here.
-  for (int i = base_idx; i < n_load; i += item.get_group_range(0) * TILE_SIZE) {
-    //int i = base_idx;
+						
+    int i = base_idx;
     if (DATA_TYPE > 0) {
       valid_items_load = sycl::min(TILE_SIZE, (n + 1) / 2 - i);
       valid_items_store = sycl::min(TILE_SIZE * 2, n - i * 2);
@@ -123,16 +120,15 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
     }
 
     // Avoid expensive divsion by the blocksize (as blocksize will always be a power-of-2)
-    local_abs_max = absmax[(i + local_idx)  >> (31 - std::countl_zero<unsigned int>(blocksize))];
+    local_abs_max = absmax[(i + local_idx) >> (31 - std::countl_zero<unsigned int>(blocksize))];
 
-    auto local_src = &(A[i]);
     if (local_idx + NUM_PER_TH < valid_items_load) {
 	reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>(&)[NUM_PER_TH]>(qvals)[0] = reinterpret_cast<sycl::vec<uint8_t, NUM_PER_TH>*>(A)[(i + local_idx) / NUM_PER_TH];
     } else {
         #pragma unroll NUM_PER_TH
         for (int lt = 0; lt < NUM_PER_TH; lt++) {
           if (local_idx + lt < valid_items_load) {
-            qvals[lt] = local_src[local_idx + lt];
+            qvals[lt] = A[i + local_idx + lt];
           } else {
             qvals[lt] = (uint8_t)0;
           }
@@ -165,7 +161,6 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
           break;
     }
 
-    auto local_dst = &(out[(DATA_TYPE > 0) ? i * 2 : i]);
     const int local_dst_size = (DATA_TYPE > 0) ? NUM_PER_TH * 2 : NUM_PER_TH;
     int local_dst_idx = (DATA_TYPE > 0) ? local_idx * 2 : local_idx;
     if(local_dst_size < valid_items_store) {
@@ -174,11 +169,10 @@ SYCL_EXTERNAL void kDequantizeBlockwise<
         #pragma unroll NUM_PER_TH
         for (int lt = 0; lt < local_dst_size ; lt++) {
           if (lt < valid_items_store) {
-            local_dst[local_dst_idx + lt] = vals[lt];
+            out[((DATA_TYPE > 0) ? i * 2 : i) + local_dst_idx + lt] = vals[lt];
           }
         }
     }
-  }
 }
 
 #define num_values_4bit 32
