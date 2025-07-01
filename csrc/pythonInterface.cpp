@@ -14,6 +14,7 @@
 #endif
 #if BUILD_XPU
 #include <xpu_ops.h>
+#include <xpu_cutlass.h>
 #endif
 #include <cpu_ops.h>
 
