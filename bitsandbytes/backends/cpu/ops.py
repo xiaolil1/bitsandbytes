@@ -26,8 +26,6 @@ if torch.__version__ >= (2, 6):
 
 
 if not isinstance(lib, ErrorHandlerMockBNBNativeLibrary):
-    logger.info("Loading C++ bitsandbytes kernels for CPU")
-
     @register_kernel("bitsandbytes::quantize_blockwise", "cpu")
     def _(A: torch.Tensor, code: torch.Tensor, blocksize: int) -> tuple[torch.Tensor, torch.Tensor]:
         torch._check_is_size(blocksize)
@@ -100,5 +98,3 @@ if not isinstance(lib, ErrorHandlerMockBNBNativeLibrary):
             out = out.reshape(A.shape)
 
         return out
-else:
-    logger.warning("Loading pytorch bitsandbytes kernels for CPU because no native library found.")
