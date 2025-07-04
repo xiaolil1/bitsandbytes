@@ -26,6 +26,7 @@ if torch.__version__ >= (2, 6):
 
 
 if not isinstance(lib, ErrorHandlerMockBNBNativeLibrary):
+
     @register_kernel("bitsandbytes::quantize_blockwise", "cpu")
     def _(A: torch.Tensor, code: torch.Tensor, blocksize: int) -> tuple[torch.Tensor, torch.Tensor]:
         torch._check_is_size(blocksize)
