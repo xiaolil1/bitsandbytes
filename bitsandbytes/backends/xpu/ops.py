@@ -74,7 +74,9 @@ def _gemv_4bit_impl(
     blocksize: int,
     out: torch.Tensor,
 ) -> None:
-    m = ct.c_int32(1)
+    import pdb
+    pdb.set_trace()
+    m = ct.c_int32(*A.shape[:-1])
     n = ct.c_int32(shapeB[0])
     k = ct.c_int32(shapeB[1])
 
@@ -180,7 +182,7 @@ if not isinstance(lib, ErrorHandlerMockBNBNativeLibrary):
         blocksize: int,
     ) -> torch.Tensor:
         shape = (*A.shape[:-1], shapeB[0])
-        out = torch.empty(shape, device=A.device, dtype=A.dtype)
+        out = torch.empty(shape, device=A.device, dtype=torch.float32)
         _gemv_4bit_impl(A, B, shapeB, absmax, code, blocksize, out=out)
         return out
 

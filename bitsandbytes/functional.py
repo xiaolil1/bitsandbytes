@@ -1630,39 +1630,39 @@ def gemv_4bit(
         raise ValueError("state cannot be None. gemv_4bit() requires the state from quantize_4bit()")
 
     absmax = state.absmax
-    if state.nested:
-        absmax = dequantize_blockwise(absmax, state.state2) + state.offset
+    #if state.nested:
+    #    absmax = dequantize_blockwise(absmax, state.state2) + state.offset
 
-    if getattr(state, "ipex", False) and state.quant_type == "nf4":
-        # compute_dtype: 1 indicates fp16, 2 indicates bf16
-        compute_dtype = 2 if A.dtype == torch.bfloat16 else 1
-        out = torch.ops.torch_ipex.woq_linear(
-            A,
-            B,
-            "nf4",
-            state.shape,
-            state.new_scales,
-            state.new_zeros,
-            None,
-            None,
-            state.blocksize,
-            compute_dtype,
-            1,
-            state.compensation,
-        )
-        return out
+    #if getattr(state, "ipex", False) and state.quant_type == "nf4":
+    #    # compute_dtype: 1 indicates fp16, 2 indicates bf16
+    #    compute_dtype = 2 if A.dtype == torch.bfloat16 else 1
+    #    out = torch.ops.torch_ipex.woq_linear(
+    #        A,
+    #        B,
+    #        "nf4",
+    #        state.shape,
+    #        state.new_scales,
+    #        state.new_zeros,
+    #        None,
+    #        None,
+    #        state.blocksize,
+    #        compute_dtype,
+    #        1,
+    #        state.compensation,
+    #    )
+    #    return out
 
-    if out is not None:
-        torch.ops.bitsandbytes.gemv_4bit.out(
-            A,
-            B,
-            state.shape,
-            absmax,
-            state.code,
-            state.blocksize,
-            out=out,
-        )
-        return out
+    #if out is not None:
+    #    torch.ops.bitsandbytes.gemv_4bit.out(
+    #        A,
+    #        B,
+    #        state.shape,
+    #        absmax,
+    #        state.code,
+    #        state.blocksize,
+    #        out=out,
+    #    )
+    #    return out
 
     return torch.ops.bitsandbytes.gemv_4bit.default(
         A,
