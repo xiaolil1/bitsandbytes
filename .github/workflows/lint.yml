@@ -17,3 +17,6 @@ jobs:
       - uses: pre-commit/action@v3.0.0
         env:
           RUFF_OUTPUT_FORMAT: github
+        with:
+          args: >
+            --exclude ./bitsandbytes/csrc/xpu_ops.cpp,./bitsandbytes/csrc/xpu_ops.h,./bitsandbytes/csrc/xpu_kernels.cpp,./bitsandbytes/csrc/xpu_kernels.h
