@@ -9,7 +9,7 @@ template <typename T, int BITS>
 void gemv_4bit_inference(int m, int n, int k, T *A, T *B,
                          float *absmax, float *datatype, float *out, int lda,
                          int ldb, int ldc, int blocksize, sycl::queue *stream) {
-  std::cout<<"this is gemv_4bit_inference path !!!\n";
+  std::cout<<"this is gemv_4bit_inference cutlass path !!!\n";
 
 //TODO: dispatch for different T
 
@@ -76,6 +76,7 @@ void gemv_4bit_inference(int m, int n, int k, T *A, T *B,
   // Data members
   //
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
+#if 0  
   cutlass::DeviceAllocation<typename Gemm::ElementA> block_A;
   cutlass::DeviceAllocation<typename Gemm::ElementB> block_B;
   cutlass::DeviceAllocation<typename Gemm::ElementC> block_C;
@@ -91,7 +92,7 @@ void gemv_4bit_inference(int m, int n, int k, T *A, T *B,
   initialize_block(block_A, seed + 2023);
   initialize_block(block_B, seed + 2022);
   initialize_block(block_C, seed + 2021);
-
+#endif
   cutlass::KernelHardwareInfo hw_info;
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
 std::cout<<"log1 ...\n";
@@ -125,7 +126,7 @@ std::cout<<"log4 ...\n";
   //out = (T*)out;
 }
 
-//template void gemv_4bit_inference<sycl::half, 16>(
+//template void gemv_4bit_fusion<sycl::half, 16>(
 //    int m, int n, int k, sycl::half *A, unsigned char *B, float *absmax,
 //    float *datatype, sycl::half *out, int lda, int ldb, int ldc, int blocksize,
 //    sycl::queue *stream);

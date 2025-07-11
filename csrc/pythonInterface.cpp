@@ -15,6 +15,7 @@
 #if BUILD_XPU
 #include <xpu_ops.h>
 #include <xpu_cutlass.h>
+//#include <xpu_cutlass_2.h>
 #endif
 #include <cpu_ops.h>
 
@@ -375,14 +376,14 @@ void gemv_4bit_inference_fp16(
     int m, int n, int k, sycl::half * A,  unsigned char* B,  float *absmax, float *datatype, sycl::half * out,
     int lda, int ldb, int ldc, int blocksize, sycl::queue* stream
 ) {
-    //gemv_4bit_inference<sycl::half, 16>(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
+    //gemv_4bit_fusion<sycl::half, 16>(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
 }
 
 void gemv_4bit_inference_bf16(
     int m, int n, int k,  sycl::ext::oneapi::bfloat16 * A,  sycl::ext::oneapi::bfloat16* B,  float *absmax, float *datatype,
     float * out,  int lda, int ldb, int ldc, int blocksize, sycl::queue* stream
 ) {
-    gemv_4bit_inference<sycl::ext::oneapi::bfloat16, 16>(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
+    gemv_4bit_inference_cutlass<sycl::ext::oneapi::bfloat16, 16>(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
 }
 
 void gemv_4bit_inference_fp32(

@@ -105,51 +105,6 @@ void gemv_4bit_inference(int m, int n, int k, T *A, unsigned char *B,
 
   kgemv_4bit_inference_cutlass<T, GROUP_SIZE, NUM_PER_THREAD, SUBG_SIZE, BITS>(
       m, n, k, A, B, absmax, datatype, out, lda, ldb, ldc, blocksize);
-#if 0	
-    auto problem_shape_MNKL = cute::append<4>(problem_size, 1);
-    auto [M, N, K, L] = problem_shape_MNKL;
-
-    // Complete the stride by combining static layout info (StrideA) with runtime size info (M,K,L)
-    stride_A = cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
-    stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
-    stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
-    stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, L));
-
-    block_A.reset(static_cast<std::size_t>(M) * K * L);
-    block_B.reset(static_cast<std::size_t>(K) * N * L);
-    block_C.reset(static_cast<std::size_t>(M) * N * L);
-    block_D.reset(static_cast<std::size_t>(M) * N * L);
-    block_ref_D.reset(static_cast<std::size_t>(M) * N * L);
-
-    initialize_block(block_A, seed + 2023);
-    initialize_block(block_B, seed + 2022);
-    initialize_block(block_C, seed + 2021);
-
-    typename Gemm::GemmKernel::Arguments arguments{
-      cutlass::gemm::GemmUniversalMode::kGemm,
-      problem_size,
-      {block_A.get(), stride_A, block_B.get(), stride_B},
-      {{options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D},
-      hw_info
-    };
-
-    Gemm gemm_op;
-
-    size_t workspace_size = Gemm::get_workspace_size(arguments);
-    cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
-
-    if (gemm_op.can_implement(arguments) != cutlass::Status::kSuccess){
-      std::cout << "Invalid Problem Size: " << options.m << 'x' << options.n << 'x' << options.k << 'x' << options.l << std::endl;
-      std::exit(1);
-    }
-
-    CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get()));
-
-    // Run the GEMM
-    CUTLASS_CHECK(gemm_op.run());
-
-    syclcompat::wait();
-#endif
 }
 #endif
 //==============================================================

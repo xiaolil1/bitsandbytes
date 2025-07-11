@@ -3,4 +3,4 @@ cmake -DCMAKE_CXX_STANDARD=17 -DSYCL_INTEL_TARGET=ON -DENABLE_INTEL_XMX=ON -DCUT
 #cmake -DCOMPUTE_BACKEND=xpu -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS_DEBUG="-O0 -g" -S .
 #cmake --build . --config Release -j
 make
-pip install -e .
+#pip install -e .
