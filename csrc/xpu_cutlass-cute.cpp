@@ -67,6 +67,24 @@ using DispatchPolicy = MainloopIntelPVC<Stages, KernelPVC /*Schedule*/>;
   using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<float /*data_type of GEMM output*/, ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
   using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<cutlass::epilogue::IntelPVCEpilogue, EpilogueOp, TileShape, decltype(tile_shape(TiledMma()))>;
 
+//  struct TensorStorageImpl: cute::tuple<SmemCStorage, SmemDStorage> {
+//    using FusionStorage = typename FusionCallbacks::SharedStorage;
+//    FusionStorage thread;
+//  };
+//
+//  struct SharedStorage {
+//    using TensorStorage = TensorStorageImpl;
+//
+//    TensorStorage tensors;
+//  };
+//  using TensorStorage = typename SharedStorage::TensorStorage;
+//
+//  // Kernel level shared memory storage
+//  struct SharedStorage {
+//    using EpilogueTensorStorage = typename CollectiveEpilogue::TensorStorage;
+//    EpilogueTensorStorage epilogue;
+//  };
+  using SharedStorage = FusionCallBacks::SharedStorage;
 static dim3
   get_block_shape() {
     return dim3(MaxThreadsPerBlock, 1, 1);
@@ -89,6 +107,15 @@ template <typename T, size_t GROUP_SIZE, size_t NUM_PER_THREAD,
           size_t SUBG_SIZE, int BITS>
 class kgemv_4bit_inference_cutlass {
 public:
+  struct Params {
+      int m, n, k;
+      T *A, *B;
+      float *absmax, *out;
+      const float *datatype;
+      int lda, ldb, ldc;
+      int blocksize;
+  };
+
   struct Arguments {
     GemmUniversalMode mode{};
     ProblemShape problem_shape{};
@@ -130,7 +157,7 @@ public:
   //  return Status::kSuccess;
   //}
 
-#if 1
+#if 0
   kgemv_4bit_inference_cutlass(int M_, int N_, int K_, T *A_, T *B_,
                              float *absmax_, const float *datatype_, float *out_,
                              int lda_, int ldb_, int ldc_, int blocksize_)
@@ -151,19 +178,35 @@ private:
   int ldb;
   int ldc;
   int blocksize;
-  sycl::local_accessor<T> quant_map;
   int SharedStorageSize = 0;
 
 public:
   CUTLASS_DEVICE
   void operator()(sycl::nd_item<1> item) const {
 
-#else
+#elif 0
   CUTLASS_DEVICE
   void operator()(int M, int N, int K, T *A, T *B,
                              float *absmax, const float *datatype, float *out,
                              int lda, int ldb, int ldc, int blocksize) {//(sycl::nd_item<1> item) const {
+#else
+  CUTLASS_DEVICE
+  void operator()(Params const& params, char* smem_buf) const {                              
+    //SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(smem_buf);
+    auto M = params.m;
+    auto N = params.n;
+    auto K = params.k;
+    auto A = params.A;
+    auto B = params.B;
+    auto out = params.out;
+    auto absmax = params.absmax;
+    auto datatype = params.datatype;
+    auto lda = params.lda;
+    auto ldb = params.ldb;
+    auto ldc = params.ldc;
+    auto blocksize = params.blocksize;
 #endif
+#if 0    
     int L = 1;
     StrideA stride_A = cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
     StrideB stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
@@ -568,7 +611,7 @@ public:
     }
   
     cst_callbacks.end();
-  
+#endif 
   }
 };
 
@@ -588,7 +631,7 @@ void gemv_4bit_inference_cutlass(int m, int n, int k, T *A, T *B,
 
   auto problem_shape = ProblemShape{m, n, k, 1};
 
-#if 1  
+#if 0  
   dim3 const block = get_block_shape();
   //dim3 const grid = get_grid_shape(params);
   dim3 grid = get_tiled_cta_shape_mnl(problem_shape); //, TileShape{}); //, ClusterShape{});
@@ -605,7 +648,7 @@ void gemv_4bit_inference_cutlass(int m, int n, int k, T *A, T *B,
         queue, kfn);
   queue.wait();
 #else  
-  using GemmKernel = kgemv_4bit_inference_cutlass<T, GROUP_SIZE, NUM_PER_THREAD, SUBG_SIZE, BITS>;
+  using GemmKernel = kgemv_4bit_inference_cutlass<T, GROUP_SIZE, NUM_PER_THREAD, SUBG_SIZE, BITS>;//(m, n, k, A, B, absmax, datatype, out, lda, ldb, ldc, blocksize);
   using GemmKernel_t = GetUnderlyingKernel_t<GemmKernel>;
 
   dim3 const block = get_block_shape();
@@ -617,20 +660,61 @@ void gemv_4bit_inference_cutlass(int m, int n, int k, T *A, T *B,
   const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);
 
   // configure smem size and carveout
-  const int smem_size = 0; //GemmKernel::SharedStorageSize;
+  //const int smem_size = 0; //GemmKernel::SharedStorageSize;
+  static constexpr int smem_size= 1;
 
   //Status launch_result{ Status::kSuccess };
   //  launch_result = Status::kSuccess;
-  cutlass::arch::synclog_setup();
+  //cutlass::arch::synclog_setup();
 
   sycl::queue q = *stream; //stream ? *stream : syclcompat::get_default_queue();
+
+  using Params = GemmKernel_t::Params;
+#if 0
+  cutlass::kernel_launch<GemmKernel, Params>(
+          grid, block, smem_size, stream, Params{m, n, k, A, B, absmax, datatype, out, lda, ldb, ldc, blocksize}, false);
+#else
   using namespace syclcompat::experimental;
 
-  auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(launch_policy{
-    sycl_grid, sycl_block, local_mem_size{static_cast<std::size_t>(smem_size)}
+//  Params params{
+//      .M = m, .N = n, .K = k,
+//      .A = A, .B = B,
+//      .out = out,
+//      .lda = lda, .ldb = ldb, .ldc = ldc
+//  };
+Params params;
+params.m = m;
+params.n = n;
+params.k = k;
+params.A = A;
+params.B = B;
+params.out = out;
+params.lda = lda;
+params.ldb = ldb;
+params.ldc = ldc;
+params.absmax = absmax;
+params.datatype = datatype;
+params.blocksize = blocksize;
+  auto event = launch<device_kernel<GemmKernel_t>>(launch_policy{
+    sycl_grid, sycl_block//, local_mem_size{static_cast<std::size_t>(smem_size)}
     , kernel_properties{sycl_exp::sub_group_size<DispatchPolicy::SubgroupSize>}
-  }, q);//, params);
+  }, q, params);
+// 计算执行范围
+//size_t local_size = 256;
+//size_t global_size = (m + local_size - 1) / local_size * local_size;
+//
+//// 启动内核
+//auto event = syclcompat::experimental::launch<
+//    GemmKernel>(
+//    launch_policy{
+//        sycl_grid, sycl_block, local_mem_size{static_cast<std::size_t>(smem_size)},//sycl::nd_range<1>(global_size, local_size),
+//        kernel_properties{sycl_exp::sub_group_size<DispatchPolicy::SubgroupSize>}
+//    },
+//    q,
+//    params
+//);
   EventManager::getInstance().addEvent(event);
+#endif
 #endif
 }
 
