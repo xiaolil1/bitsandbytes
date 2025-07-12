@@ -106,7 +106,7 @@ template <typename T, int BITS>
 void gemv_4bit_inference_cutlass(int m, int n, int k, T *A, T *B,
                          float *absmax, float *datatype, float *out, int lda,
                          int ldb, int ldc, int blocksize, sycl::queue *stream);
-#else
+
 template <typename T, int BITS>
 void gemv_4bit_inference(int m, int n, int k, T *A, T *B,
                          float *absmax, float *datatype, float *out, int lda,
