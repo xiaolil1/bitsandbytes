@@ -84,7 +84,7 @@ class TestXPU:
             compress_statistics=double_quant,
             quant_storage=quant_storage,
         )
-        pdb.set_trace()
+        ##pdb.set_trace()
         C3 = torch.matmul(A, B)
         pdb.set_trace()
         C2 = F.gemv_4bit(A, B, state=state)
