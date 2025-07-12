@@ -34,7 +34,6 @@ using namespace cute;
 using namespace cutlass;
 using namespace cutlass::gemm;
 
-#if 1
 using ElementA = bfloat16_t;
 using ElementB = bfloat16_t;
 using ElementC = float;
@@ -65,14 +64,9 @@ using TiledMma =
                                   Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
 using DispatchPolicy = MainloopIntelPVC<Stages, KernelPVC /*Schedule*/>;
-#endif
-//using TiledMma =
-//    typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-//                                  Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-//static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
-//using TileShape = Shape<_256, _256, _32>;
-//using ProblemShape = Shape<int, int, int, int>;
-#if 1
+  using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<float /*data_type of GEMM output*/, ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
+  using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<cutlass::epilogue::IntelPVCEpilogue, EpilogueOp, TileShape, decltype(tile_shape(TiledMma()))>;
+
 static dim3
   get_block_shape() {
     return dim3(MaxThreadsPerBlock, 1, 1);
@@ -91,122 +85,10 @@ get_tiled_cta_shape_mnl(ProblemShape problem_shape) {
   };
 }
 
-//struct Arguments {
-//  GemmUniversalMode mode{};
-//  ProblemShape problem_shape{};
-//  //MainloopArguments mainloop{};
-//  ElementA const* ptr_A;
-//  StrideA dA;
-//  ElementB const* ptr_B;
-//  StrideB dB;
-//
-//  //EpilogueArguments epilogue{};
-//  //typename FusionCallbacks::Arguments thread{};
-//  ElementC const* ptr_C;
-//  StrideC dC;
-//  ElementD* ptr_D;
-//  StrideD dD;
-//
-//  cutlass::KernelHardwareInfo hw_info{};
-//  //TileSchedulerArguments scheduler{};
-//};
-
-//static size_t get_workspace_size(Arguments const& args) {
-//  size_t workspace_bytes = 0;
-//  if (args.mode == GemmUniversalMode::kGemmSplitKParallel) {
-//    workspace_bytes += sizeof(int) * size_t(cute::size<0>(TileShape{})) * size_t(cute::size<1>(TileShape{}));
-//  }
-//
-//  //TODO: Check it!!
-//  workspace_bytes += 0; //GemmKernel::get_workspace_size(args);
-//
-//  CUTLASS_TRACE_HOST("  workspace_bytes: " << workspace_bytes);
-//
-//  return workspace_bytes;
-//}
-#endif
-
 template <typename T, size_t GROUP_SIZE, size_t NUM_PER_THREAD,
           size_t SUBG_SIZE, int BITS>
 class kgemv_4bit_inference_cutlass {
 public:
-//  kgemv_4bit_inference_cutlass(int M_, int N_, int K_, T *A_, T *B_,
-//                             float *absmax_, const float *datatype_, float *out_,
-//                             int lda_, int ldb_, int ldc_, int blocksize_)
-//      : M(M_), N(N_), K(K_), A(A_), B(B_),
-//        absmax(absmax_), out(out_), datatype(datatype_),
-//        lda(lda_), ldb(ldb_), ldc(ldc_), blocksize(blocksize_) {}
-
-  //SYCL_EXTERNAL
-  //void operator()(sycl::nd_item<1> item) const {
-
-// Specific setting
-#if 1
-using ElementA = bfloat16_t;
-using ElementB = bfloat16_t;
-using ElementC = float;
-using ElementD = float;
-using ElementAccumulator = float;      // data_type of accumulator
-using ElementComputeEpilogue = float;  // data_type of epilogue operations
-using ElementOutput = float;
-static constexpr int Stages = 2;
-
-using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
-using GmemTiledCopyB = XE_2D_U16x32x32_LD_V;
-using CopyOpG2R = XE_2D_U32x8x16_LD_N;
-using CopyOpR2G = XE_2D_U32x8x16_ST_N;
-using GmemTiledCopyC = CopyOpG2R;
-using GmemTiledCopyD = cute::conditional_t<not cute::is_void_v<ElementD> && not cute::is_void_v<CopyOpR2G>,
-                                             CopyOpR2G, XE_2D_U32x8x16_ST_N>;
-
-using StrideA = cutlass::gemm::TagToStrideA_t<cutlass::layout::RowMajor>;
-using StrideB = cutlass::gemm::TagToStrideB_t<cutlass::layout::RowMajor>;
-using StrideC = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
-using StrideD = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
-using ProblemShape = Shape<int, int, int, int>;
-
-//  int L = 1;
-//  StrideA stride_A = cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
-//  StrideB stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
-//  StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
-  //cutlass::KernelHardwareInfo hw_info;
-  //hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
-  using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<float /*data_type of GEMM output*/, ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
-  using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<cutlass::epilogue::IntelPVCEpilogue, EpilogueOp, TileShape, decltype(tile_shape(TiledMma()))>;
-
-using TileShape = Shape<_256, _256, _32>;
-using WorkgroupTileShape = TileShape;
-using TiledMma =
-    typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-                                  Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});                                    
-using DispatchPolicy = MainloopIntelPVC<Stages, KernelPVC /*Schedule*/>;
-#endif 
-#if 1
-//using ClusterShape = cutlass::gemm::GemmShape<
-//    cute::size<0>(typename DispatchPolicy::ClusterShape{}),
-//    cute::size<1>(typename DispatchPolicy::ClusterShape{}),
-//    cute::size<2>(typename DispatchPolicy::ClusterShape{})>;
-
-//new Functions
-//static dim3
-//  get_block_shape() {
-//    return dim3(MaxThreadsPerBlock, 1, 1);
-//}
-//
-//static dim3
-//get_tiled_cta_shape_mnl(ProblemShape problem_shape) {
-//  using cta_shape = TileShape;
-//  auto cta_m = (get<0>(problem_shape) + get<0>(cta_shape{}) - 1) / get<0>(cta_shape{});
-//  auto cta_n = (get<1>(problem_shape) + get<1>(cta_shape{}) - 1) / get<1>(cta_shape{});
-//
-//  return {
-//    static_cast<uint32_t>(cta_m),
-//    static_cast<uint32_t>(cta_n),
-//    static_cast<uint32_t>(get<3>(problem_shape))
-//  };
-//}
-//SYCL_EXTERNAL
 struct Arguments {
   GemmUniversalMode mode{};
   ProblemShape problem_shape{};
@@ -247,11 +129,6 @@ static size_t get_workspace_size(Arguments const& args) {
 //  CudaHostAdapter* cuda_adapter = nullptr) {
 //  return Status::kSuccess;
 //}
-#endif
-//template <typename T, size_t GROUP_SIZE, size_t NUM_PER_THREAD,
-//          size_t SUBG_SIZE, int BITS>
-//class kgemv_4bit_inference_cutlass {
-//public:
 #if 1
   kgemv_4bit_inference_cutlass(int M_, int N_, int K_, T *A_, T *B_,
                              float *absmax_, const float *datatype_, float *out_,
@@ -276,11 +153,9 @@ private:
   sycl::local_accessor<T> quant_map;
   int SharedStorageSize = 0;
 public:
-//  SYCL_EXTERNAL
 CUTLASS_DEVICE
   void operator()(sycl::nd_item<1> item) const {
 
-  //std::cout<<"this is kgemv_4bit_inference cutlass fusion path !!!\n";
 #else
   CUTLASS_DEVICE
   void operator()(int M, int N, int K, T *A, T *B,
@@ -693,91 +568,7 @@ CUTLASS_DEVICE
 
   cst_callbacks.end();
 }
-
-//private:
-//  int M;
-//  int N;
-//  int K;
-//  T *A;
-//  T *B;
-//  float *absmax;
-//  const float *datatype;
-//  float *out;
-//  int lda;
-//  int ldb;
-//  int ldc;
-//  int blocksize;
-//  sycl::local_accessor<T> quant_map;
-//  int SharedStorageSize = 0;
 };
-#if 0
-//TODO: replace with private kernel submit ???
-//Launch Kernel
-  dim3 const block = GemmKernel::get_block_shape();
-  dim3 const grid = get_grid_shape(params);
-
-  const syclcompat::dim3 sycl_block(block.x, block.y, block.z);
-  const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);
-
-  // configure smem size and carveout
-  int smem_size = GemmKernel::SharedStorageSize;
-
-  Status launch_result{ Status::kSuccess };
-    launch_result = Status::kSuccess;
-    cutlass::arch::synclog_setup();
-
-  sycl::queue q = *stream; //stream ? *stream : syclcompat::get_default_queue();
-  using namespace syclcompat::experimental;
-  if constexpr (cute::is_same_v<DispatchPolicy, MainloopDeviceAgnostic>) {
-    auto event = launch<device_kernel<GemmKernel>>(launch_policy{
-      sycl_grid, sycl_block, local_mem_size{static_cast<std::size_t>(smem_size)}
-    }, q, params);
-    EventManager::getInstance().addEvent(event);
-  } else {
-    auto event = launch<device_kernel<GemmKernel>>(launch_policy{
-      sycl_grid, sycl_block, local_mem_size{static_cast<std::size_t>(smem_size)}
-      , kernel_properties{sycl_exp::sub_group_size<DispatchPolicy::SubgroupSize>}
-    }, q, params);
-    EventManager::getInstance().addEvent(event);
-  }
-#endif
-
-#if 0
-template <typename T, size_t GROUP_SIZE, size_t NUM_PER_THREAD,
-          size_t SUBG_SIZE, int BITS>
-class kgemv_4bit_inference_cutlass {
-public:
-SYCL_EXTERNAL  void operator()(sycl::nd_item<1> item) const;
-
-  kgemv_4bit_inference_cutlass(int M_, int N_, int K_, T *A_, unsigned char *B_,
-                       float *absmax_, const float *datatype_, T *out_,
-                       int lda_, int ldb_, int ldc_, int blocksize_)
-      : M(M_), N(N_), K(K_), A(A_), B(B_), absmax(absmax_), datatype(datatype_),
-        out(out_), lda(lda_), ldb(ldb_), ldc(ldc_), blocksize(blocksize_),
-        quant_map(), SharedStorageSize() {}
-
-  void sycl_ker_local_memory_creation(sycl::handler &cgh) {
-    quant_map = sycl::local_accessor<T>(16, cgh);
-  }
-
-private:
-  int M;
-  int N;
-  int K;
-  T *A;
-  unsigned char *B;
-  float *absmax;
-  const float *datatype;
-  T *out;
-  int lda;
-  int ldb;
-  int ldc;
-  int blocksize;
-  sycl::local_accessor<T> quant_map;
-  int SharedStorageSize = 0;
-};
-
-#endif
 
 //template class kgemv_4bit_inference_cutlass<sycl::ext::oneapi::bfloat16, 128, 4, 32, 16>;
 
@@ -794,6 +585,8 @@ void gemv_4bit_inference_cutlass(int m, int n, int k, T *A, T *B,
   size_t workgroup_num = (n + NUM_PER_THREAD - 1) / NUM_PER_THREAD;
 
   auto problem_shape = ProblemShape{m, n, k, 1};
+
+#if 1  
   dim3 const block = get_block_shape();
   //dim3 const grid = get_grid_shape(params);
   dim3 grid = get_tiled_cta_shape_mnl(problem_shape); //, TileShape{}); //, ClusterShape{});
@@ -802,7 +595,6 @@ void gemv_4bit_inference_cutlass(int m, int n, int k, T *A, T *B,
   const syclcompat::dim3 sycl_block(block.x, block.y, block.z);
   const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);
 
-#if 1  
   auto &queue = *stream;
   kgemv_4bit_inference_cutlass<T, GROUP_SIZE, NUM_PER_THREAD, SUBG_SIZE, BITS> kfn(m, n, k, A, B, absmax, datatype, out, lda, ldb, ldc, blocksize);
     sycl_kernel_submit<decltype(kfn), 1, 32>(
@@ -848,19 +640,3 @@ template void gemv_4bit_inference_cutlass<sycl::ext::oneapi::bfloat16, 16>(
     float *absmax, float *datatype, float *out, int lda,
     int ldb, int ldc, int blocksize, sycl::queue *stream);
 
-//template class kgemv_4bit_inference_cutlass<sycl::ext::oneapi::bfloat16, 128, 4, 32, 16>;
-//template void gemv_4bit_fusion<sycl::half, 16>(
-//    int m, int n, int k, sycl::half *A, unsigned char *B, float *absmax,
-//    float *datatype, sycl::half *out, int lda, int ldb, int ldc, int blocksize,
-//    sycl::queue *stream);
-//template void gemv_4bit_inference<sycl::ext::oneapi::bfloat16, 16>(
-//    int m, int n, int k, sycl::ext::oneapi::bfloat16 *A, sycl::ext::oneapi::bfloat16 *B,
-//    float *absmax, float *datatype, float *out, int lda,
-//    int ldb, int ldc, int blocksize, sycl::queue *stream);
-//template void gemv_4bit_inference<float, 32>(int m, int n, int k, float *A,
-//                                             unsigned char *B, float *absmax,
-//                                             float *datatype, float *out,
-//                                             int lda, int ldb, int ldc,
-//                                             int blocksize,
-//                                             sycl::queue *stream);
-//
