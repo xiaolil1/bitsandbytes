@@ -87,7 +87,7 @@ class TestXPU:
         ##pdb.set_trace()
         C3 = torch.matmul(A, B)
         #pdb.set_trace()
-        C2 = F.gemv_4bit(A, B, state=state)
+        C2 = F.gemv_4bit(A, qB, state=state)
         #pdb.set_trace()
         print(C3[0])
         print(C2[0])
