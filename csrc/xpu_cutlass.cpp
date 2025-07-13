@@ -6,7 +6,7 @@
 #include <sycl/sycl.hpp>
 
 template <typename T, int BITS>
-void gemv_4bit_inference(int m, int n, int k, T *A, T *B,
+void gemv_4bit_inference_cutlass(int m, int n, int k, T *A, T *B,
                          float *absmax, float *datatype, float *out, int lda,
                          int ldb, int ldc, int blocksize, sycl::queue *stream) {
   std::cout<<"this is gemv_4bit_inference cutlass path !!!\n";
@@ -130,7 +130,7 @@ std::cout<<"log4 ...\n";
 //    int m, int n, int k, sycl::half *A, unsigned char *B, float *absmax,
 //    float *datatype, sycl::half *out, int lda, int ldb, int ldc, int blocksize,
 //    sycl::queue *stream);
-template void gemv_4bit_inference<sycl::ext::oneapi::bfloat16, 16>(
+template void gemv_4bit_inference_cutlass<sycl::ext::oneapi::bfloat16, 16>(
     int m, int n, int k, sycl::ext::oneapi::bfloat16 *A, sycl::ext::oneapi::bfloat16 *B,
     float *absmax, float *datatype, float *out, int lda,
     int ldb, int ldc, int blocksize, sycl::queue *stream);

@@ -67,7 +67,7 @@ class TestXPU:
         #pdb.set_trace()
         if kind == "fc1":
             A = torch.ones(dim, dim, dtype=dtype, device=device)
-            B = torch.ones(dim, dim, dtype=dtype, device=device) / math.sqrt(dim)
+            B = torch.ones(dim, dim, dtype=dtype, device=device)# / math.sqrt(dim)
         elif kind == "fc2":
             A = torch.randn(1, 4 * dim, dtype=dtype, device=device)
             B = torch.randn(dim, 4 * dim, dtype=dtype, device=device) / math.sqrt(dim)
@@ -91,6 +91,8 @@ class TestXPU:
         #pdb.set_trace()
         print(C3[0])
         print(C2[0])
+        #print(C3)
+        #print(C2)
         #A.requires_grad = True
         #C1 = bnb.matmul_4bit(A, qB.t(), state)
 

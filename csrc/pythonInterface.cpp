@@ -384,9 +384,9 @@ void gemv_4bit_inference_bf16(
     float * out,  int lda, int ldb, int ldc, int blocksize, sycl::queue* stream
 ) {
 #if 1
-    gemv_4bit_inference_cutlass<sycl::ext::oneapi::bfloat16, 16>(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
+    gemv_4bit_inference_cutlass_cute<sycl::ext::oneapi::bfloat16, 16>(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
 #else    
-    gemv_4bit_inference<sycl::ext::oneapi::bfloat16, 16>(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
+    gemv_4bit_inference_cutlass<sycl::ext::oneapi::bfloat16, 16>(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
 #endif    
 }
 
