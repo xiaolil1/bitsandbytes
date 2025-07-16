@@ -169,7 +169,7 @@ public:
     int m, n, k;
     T *A, *B;
     float *absmax, *out;
-    const float *datatype;
+    //const float *datatype;
     int lda, ldb, ldc;
     int blocksize;
 	  
@@ -243,7 +243,7 @@ public:
     T* B = params.B;
     float* absmax = params.absmax;
     float* out = params.out;
-    float* datatype = params.datatype;
+    //float* datatype = params.datatype;
     int lda = params.lda;
     int ldb = params.ldb;
     int ldc = params.ldc;
@@ -418,7 +418,7 @@ std::cout<<"this is gemv_4bit_inference_cutlass_cute !!!!!!\n";
   params.B = B;
   params.absmax = absmax;
   params.out = out;
-  params.datatype = datatype;
+  //params.datatype = datatype;
   params.lda = lda;
   params.ldb = ldb;
   params.ldc = ldc;
@@ -443,7 +443,31 @@ std::cout<<"this is gemv_4bit_inference_cutlass_cute !!!!!!\n";
   dim3 const block = get_block_shape();
   dim3 const grid = GemmKernel::get_grid_shape(params);
   cutlass::arch::synclog_setup();
+#if 0
   cutlass::kernel_launch<GemmKernel, Params>(grid, block, smem_size, stream, params, false);
+#else
+        constexpr bool allow_subgroup_size_prop = true;
+        auto kernel_props = [] {
+std::cout<<"sycl-else-log1  ----------\n";
+            return syclcompat::experimental::kernel_properties{
+              sycl::ext::oneapi::experimental::sub_group_size<DispatchPolicy::SubgroupSize>
+            };
+        }();
+std::cout<<"sycl-else-log2 ----------\n";
+        syclcompat::experimental::launch_properties launch_props {
+          sycl::ext::oneapi::experimental::work_group_scratch_size(smem_size),
+        };
+std::cout<<"sycl-else-log3  ----------\n";
+        const syclcompat::dim3 sycl_block(block.x, block.y, block.z);
+        const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);
+        syclcompat::experimental::launch_policy policy{
+          sycl_grid, sycl_block, launch_props, kernel_props
+        };
+std::cout<<"log else-2  ----------\n";
+        auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
+std::cout<<"sycl-else-log4  ----------\n";
+        EventManager::getInstance().addEvent(event);
+#endif  
   syclcompat::wait();
 }
 

@@ -28,7 +28,7 @@ set(CUDA_FILES csrc/ops.cu csrc/kernels.cu)
 set(HIP_FILES csrc/ops.hip csrc/kernels.hip)
 set(MPS_FILES csrc/mps_ops.mm)
 set(METAL_FILES csrc/mps_kernels.metal)
-set(XPU_FILES csrc/xpu_ops.cpp csrc/xpu_kernels.cpp csrc/xpu_cutlass.cpp csrc/xpu_cutlass-cute.cpp csrc/xpu_cutlass_fusion.cpp)
+set(XPU_FILES csrc/xpu_ops.cpp csrc/xpu_kernels.cpp csrc/xpu_cutlass.cpp csrc/xpu_cutlass-cute.cpp)# csrc/xpu_cutlass_fusion.cpp)
 # C++ sources are always included
 list(APPEND SRC_FILES ${CPP_FILES})
 

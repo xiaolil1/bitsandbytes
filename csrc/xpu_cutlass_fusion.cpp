@@ -186,7 +186,7 @@ public:
     uint8_t* B;
     float *absmax; //TODO(Xiaoli): FIX ME
     float* out;
-    const float *datatype;
+    float *datatype;
     //int lda, ldb, ldc;
     //int blocksize;
 	  
@@ -304,7 +304,7 @@ public:
     //int lda = params.lda;
     //int ldb = params.ldb;
     //int ldc = params.ldc;
-    int blocksize = params.blocksize;
+    //int blocksize = params.blocksize;
     auto tiled_copy_a = params.tiled_copy_a;
     auto tiled_copy_b = params.tiled_copy_b;
 	auto tiled_copy_scale = params.tiled_copy_scale;
@@ -315,7 +315,7 @@ public:
     //TODO(Xiaoli): FIX ME
     SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
-    float* quant_map = *reinterpret_cast<SharedStorage*>(smem_buf);
+    float* quant_map = *reinterpret_cast<float>(smem_buf);
     // Preconditions
     static_assert(cute::rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
@@ -507,7 +507,7 @@ std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!
   //params.lda = lda;
   //params.ldb = ldb;
   //params.ldc = ldc;
-  //params.blocksize = blocksize;
+  params.group_size = blocksize;
   
   params.mode = cutlass::gemm::GemmUniversalMode::kGemm;
   params.problem_shape = problem_size;
@@ -530,13 +530,37 @@ std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!
         make_layout(make_shape(n, scale_k, l), stride_S));
   Copy_Scale tiled_copy_scale{Copy_Scale{}.with(mScale)};
   params.tiled_copy_scale = tiled_copy_scale;
-  params.group_size = blocksize;
+  //params.group_size = blocksize;
 	
   dim3 const block = get_block_shape();
   dim3 const grid = GemmKernel::get_grid_shape(params);
   //printf("Host Grid: (%d, %d, %d)\n", grid.x, grid.y, grid.z);
   //printf("Host Block: (%d, %d, %d)\n", block.x, block.y, block.z);
+#if 1  
   cutlass::kernel_launch<GemmKernel, Params>(grid, block, smem_size, stream, params, false);
+#else
+        constexpr bool allow_subgroup_size_prop = true;
+        auto kernel_props = [] {
+std::cout<<"sycl-else-log1  ----------\n";
+            return syclcompat::experimental::kernel_properties{
+              sycl::ext::oneapi::experimental::sub_group_size<DispatchPolicy::SubgroupSize>
+            };
+        }();
+std::cout<<"sycl-else-log2 ----------\n";
+        syclcompat::experimental::launch_properties launch_props {
+          sycl::ext::oneapi::experimental::work_group_scratch_size(smem_size),
+        };
+std::cout<<"sycl-else-log3  ----------\n";
+        const syclcompat::dim3 sycl_block(block.x, block.y, block.z);
+        const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);
+        syclcompat::experimental::launch_policy policy{
+          sycl_grid, sycl_block, launch_props, kernel_props
+        };
+std::cout<<"log else-2  ----------\n";
+        auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
+std::cout<<"sycl-else-log4  ----------\n";
+        EventManager::getInstance().addEvent(event);
+#endif        
   syclcompat::wait();
 }
 
