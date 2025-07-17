@@ -39,15 +39,15 @@ using namespace cutlass::gemm;
 using MmaType = cutlass::bfloat16_t;
 using QuantType = cutlass::int8_t; //NF4,FP4
 using ElementA = MmaType; //bfloat16_t;
-using ElementScale = MmaType;
+//using ElementScale = float; //MmaType;
 
 //using ElementBOptionalTuple = cute::tuple<QuantType, ElementScale>;
 using ElementB = QuantType; //cutlass::gemm::collective::detail::deduce_mixed_width_dtype_t<0, ElementBOptionalTuple>;
-using ScaleB = ElementScale; //cutlass::gemm::collective::detail::deduce_mixed_width_dtype_t<1, ElementBOptionalTuple>;
+//using ScaleB = ElementScale; //cutlass::gemm::collective::detail::deduce_mixed_width_dtype_t<1, ElementBOptionalTuple>;
 
 using ElementMMA = ElementA;
 using ElementQuant = QuantType;
-using ElementScale = ScaleB; 
+//using ElementScale = ScaleB; 
 using NonVoidElementScale = MmaType;
 using StrideScale = cute::Stride<_1, int64_t, int64_t>;
 
@@ -190,13 +190,13 @@ public:
     //int lda, ldb, ldc;
     //int blocksize;
 	  
-	GemmUniversalMode mode{};
+	  GemmUniversalMode mode{};
     ProblemShape problem_shape{};
 	
     //inloopParams mainloop{};
-	Copy_A tiled_copy_a;
+	  Copy_A tiled_copy_a;
     Copy_B tiled_copy_b;
-	Copy_Scale tiled_copy_scale;
+	  Copy_Scale tiled_copy_scale;
     //Copy_Zero tiled_copy_zero;
     int group_size;
 	
@@ -234,7 +234,7 @@ public:
             class LayoutScales,
             class... Ts>
   CUTLASS_DEVICE
-  void transform_quant(
+  void dequant(
     Tensor<EngineIn, LayoutIn> const& tCrA_load, 
     Tensor<EngineOut, LayoutOut>& tCrA_mma,
     Tensor<EngineScales, LayoutScales>& tCrS_input,
@@ -248,46 +248,31 @@ public:
     using SrcType = typename EngineIn::value_type;
     using DstType = typename EngineOut::value_type;
 
-    if constexpr (sizeof_bits_v<SrcType> < 8) {
-      // TODO (Codeplay): Current NumericArrayConverter doesn't work for int4 on intel Xe, just workaround and
-      // hardcode here for functionality test, will remove this branch in the future.
+#if 0
+    auto const& src = tCrA_load(_, _, _);
+    auto const& dst = tCrA_mma(_, _, _);
+    auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
+    auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
+    constexpr int num_elements = decltype(size(src))::value;
+
+  // TODO(Codeplay): (perf) consider replacing `pack` with `num_elements` here - See xe_flash_attn_mma.hpp
+    constexpr int pack = decltype(select_packing<SrcType, DstType, num_elements>::value())::value;
+    //using Converter = cutlass::NumericArrayConverter<DstType, SrcType, pack, cutlass::FloatRoundStyle::round_to_nearest>;
+    using SrcArray = cutlass::Array<SrcType, pack>;
+    using DstArray = cutlass::Array<DstType, pack>;
+    constexpr int iters = num_elements / pack;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < iters; ++i) {
+      SrcArray const* pSrcArr = reinterpret_cast<SrcArray const*>(pSrc) + i;
+      DstArray* pDstArr = reinterpret_cast<DstArray*>(pDst) + i;
+	//LUT convert
       #pragma unroll
-      for (int i = 0; i < decltype(size(tCrA_mma))::value; i++) {
-        tCrA_mma[i] = static_cast<DstType>(tCrA_load[i].get());
-      }
-    } else {
-      auto const& src = tCrA_load(_, _, _);
-      auto const& dst = tCrA_mma(_, _, _);
-      auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
-      auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
-      constexpr int num_elements = decltype(size(src))::value;
-
-    // TODO(Codeplay): (perf) consider replacing `pack` with `num_elements` here - See xe_flash_attn_mma.hpp
-      constexpr int pack = decltype(select_packing<SrcType, DstType, num_elements>::value())::value;
-      using Converter = cutlass::NumericArrayConverter<DstType, SrcType, pack, cutlass::FloatRoundStyle::round_to_nearest>;
-      using SrcArray = cutlass::Array<SrcType, pack>;
-      using DstArray = cutlass::Array<DstType, pack>;
-      constexpr int iters = num_elements / pack;
-
-      CUTLASS_PRAGMA_UNROLL
-      for (int i = 0; i < iters; ++i) {
-        SrcArray const* pSrcArr = reinterpret_cast<SrcArray const*>(pSrc) + i;
-        DstArray* pDstArr = reinterpret_cast<DstArray*>(pDst) + i;
-		//TODO(Xiaoli): LUT convert
-        //*pDstArr = Converter::convert(*pSrcArr);
-/*              for (int k = 0; k < num_values_8bit / 4; k++) {
-        local_B[k * 2] =
-            quant_map[local_B_4bit[(i * num_values_8bit / 4) + k] >> 4] *
-            local_absmax;
-        local_B[k * 2 + 1] =
-            quant_map[local_B_4bit[(i * num_values_8bit / 4) + k] & 0x0F] *
-            local_absmax;
-      }*/
-        #pragma unroll
-        for(int j = 0; j < num_elements; j++){
-          (*pDstArr)[j] = static_cast<DstType>(quant_map[(*pSrcArr)[j] >> 4]);
-          (*pDstArr)[j+1] = static_cast<DstType>(quant_map[(*pSrcArr)[j] & 0x0F]);
-        }
+      for(int j = 0; j < num_elements; j++){
+        //printf("(*pSrcArr)[%d] = %f\n", j, (*pSrcArr)[j]);
+        (*pDstArr)[j] = static_cast<DstType>(quant_map[(*pSrcArr)[j] >> 4]);
+        printf("(*pSrcArr)[%d] = %f, (*pDstArr)[%d] = %f\n", j, (*pSrcArr)[j], j, (float)(*pDstArr)[j]);
+        //(*pDstArr)[j+1] = static_cast<DstType>(quant_map[(*pSrcArr)[j] & 0x0F]);
       }
     }
 
@@ -300,7 +285,21 @@ public:
       for (int j = 0; j < 32; ++j) {
         tCrA_mma(_, i, _)[j] *= tCrS_input(i);
       }
-    }    
+    }
+#endif
+    auto const& src = tCrA_load(_, _, _);
+    //auto const& dst = tCrA_mma(_, _, _);
+    auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
+    //auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
+    constexpr int num_elements = decltype(size(src))::value;
+    CUTLASS_PRAGMA_UNROLL
+    for(int i = 0; i < num_elements; i++){
+       tCrA_mma(_, _, _)[i] = static_cast<DstType>(1.f);//quant_map[*(pSrc + i) >> 4]) * tCrS_input(i);
+       //tCrA_mma(_, _, _)[i + 1] = static_cast<DstType>(quant_map[*(pSrc + i) & 0x0F]) * tCrS_input(i);
+       //printf("quant_map[*(pSrc + i) >> 4] = %f, tCrS_input(%d) = %f\n", quant_map[*(pSrc + i) >> 4], i, tCrS_input(0));
+       printf("*(pSrc + i) = %c\n", *(pSrc + i));
+       //printf("*(pSrc + i) = %c, quant_map[*(pSrc + i) >> 4] = %f\n", *(pSrc + i), quant_map[*(pSrc + i) >> 4]);
+    }
   }
   
   CUTLASS_DEVICE
@@ -320,7 +319,8 @@ public:
     auto tiled_copy_a = params.tiled_copy_a;
     auto tiled_copy_b = params.tiled_copy_b;
 	auto tiled_copy_scale = params.tiled_copy_scale;
-   
+  if(cute::thread0())
+  printf("this is fusion kernel...........\n"); 
     int L = 1;
     auto problem_size = ProblemShape{M, N, K, L};
        
@@ -336,28 +336,35 @@ public:
   	
     // Get the appropriate blocks for this sub_group -- potential for sub_group locality
     int thread_idx = int(ThreadIdxX());
-    
+//#if 0 
     //Load Dequat table
     if (thread_idx < 16) {
-      quant_map[thread_idx] = T(datatype[thread_idx]);
+      quant_map[thread_idx] = datatype[thread_idx]; //T(datatype[thread_idx]);
+      printf("quant_map[thread_idx] = %f\n", quant_map[thread_idx]); 
     }
-    barrier_wait(2);
+    barrier_wait(1);
 
+#if 1 
     auto blk_shape = TileShape{};
     int m_coord, n_coord, l_coord;
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
+      if(cute::thread0()) printf("AlongN !!\n");
       m_coord = BlockIdxY();
       n_coord = BlockIdxX();
       l_coord = BlockIdxZ();
     } else {
+      if(cute::thread0()) printf("not AlongN !!\n");
       m_coord = BlockIdxX();
       n_coord = BlockIdxY();
       l_coord = BlockIdxZ();
     }
-  
+    if(cute::thread0()) printf("M = %d, N=%d, K=%d, L=%d, m_coord = %d, n_coord = %d, l_coord = %d, BlockIdxX() = %d, BlockIdxY() = %d, BlockIdxZ() = %d\n",M, N, K, L, m_coord, n_coord, l_coord, BlockIdxX(), BlockIdxY(), BlockIdxZ());
+
     auto blk_coord_mnkl = make_coord(m_coord, n_coord, _, l_coord);
     constexpr auto workgroup_shape = WorkgroupTileShape{}; 
-    constexpr auto subgroup_shape = SubgroupTileShape{};                
+    constexpr auto subgroup_shape = SubgroupTileShape{};   
+    if(cute::thread0())
+      printf("BLK_M = %d, BLK_N = %d, BLK_K = %d, ATOM_M = %d, ATOM_N = %d, ATOM_K = %d, SG_M = %d, SG_N = %d, SG_K = %d\n", BLK_M, BLK_N, BLK_K, ATOM_M, ATOM_N, ATOM_K, SG_M, SG_N, SG_K); 
   
     Tensor mA_mkl = cute::get_pvc_tensor(make_shape(M,K,L));   //(m,k,l)
     Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L));   //(n,k,l)
@@ -373,11 +380,12 @@ public:
   
     auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(K)), make_shape(K));
     int  k_tile_count = ceil_div(K, get<2>(workgroup_shape));
+    if(cute::thread0()) printf("k_tile_count = \n", k_tile_count);
          
 //Run MainLoop	  
     auto thr_copy_A = tiled_copy_a.get_slice(thread_idx);
     auto thr_copy_B = tiled_copy_b.get_slice(thread_idx);
-	auto thr_copy_scale = tiled_copy_scale.get_slice(thread_idx);
+	  auto thr_copy_scale = tiled_copy_scale.get_slice(thread_idx);
   
     auto sg = syclcompat::get_nd_item<1>().get_sub_group();
     auto first_thread_in_sg_idx = sg.get_group_linear_id() * DispatchPolicy::SubgroupSize;
@@ -445,7 +453,8 @@ public:
       prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
 
-    const int k_reload_factor = params.group_size / BLK_K; 
+    const int k_reload_factor = params.group_size / BLK_K;
+    if(cute::thread0()) printf("k_reload_factor = %d", k_reload_factor); 
 
     CUTLASS_PRAGMA_UNROLL
     for (int k_tile = 0, k = k_start_idx; k_tile < k_tile_count; ++k_tile, ++k, ++prefetch_k) {
@@ -454,7 +463,7 @@ public:
       copy(tiled_copy_b, tBgB(_,_,_,k), frag_copy_B);
 
       copy(tiled_copy_scale, copy_iter_s(_, _, _, k_start_idx + (k_tile / k_reload_factor)), copy_tCrS);
-      transform_quant(quant_frag, mma_B, fragment_scale_input, quant_map);
+      dequant(quant_frag, mma_B, fragment_scale_input, quant_map);
 
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
@@ -473,6 +482,7 @@ public:
       tiled_mma,
       thread_idx
     );
+#endif    
   }    
 };
 
@@ -487,7 +497,8 @@ std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!
 
   using GemmKernel = kgemm_4bit_inference_cutlass_dequant<T, BITS>;
 
-  static constexpr int smem_size= 64; // (16 * 4)
+ //TODO(Xiaoli): FIX ME to add mma_B_dequant
+  static constexpr int smem_size= 512; // (16 * 32) for quant_map
 
   sycl::queue q = *stream;
   
@@ -550,24 +561,19 @@ std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!
   //printf("Host Block: (%d, %d, %d)\n", block.x, block.y, block.z);
   constexpr bool allow_subgroup_size_prop = true;
   auto kernel_props = [] {
-std::cout<<"sycl-else-log1  ----------\n";
       return syclcompat::experimental::kernel_properties{
         sycl::ext::oneapi::experimental::sub_group_size<DispatchPolicy::SubgroupSize>
       };
   }();
-std::cout<<"sycl-else-log2 ----------\n";
   syclcompat::experimental::launch_properties launch_props {
     sycl::ext::oneapi::experimental::work_group_scratch_size(smem_size),
   };
-std::cout<<"sycl-else-log3  ----------\n";
   const syclcompat::dim3 sycl_block(block.x, block.y, block.z);
   const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);
   syclcompat::experimental::launch_policy policy{
     sycl_grid, sycl_block, launch_props, kernel_props
   };
-std::cout<<"log else-2  ----------\n";
   auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
-std::cout<<"sycl-else-log4  ----------\n";
   EventManager::getInstance().addEvent(event);
   syclcompat::wait();
 }

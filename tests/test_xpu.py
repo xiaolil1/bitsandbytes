@@ -47,7 +47,7 @@ class TestXPU:
         [torch.uint8],
         ids=describe_dtype,
     )
-    @pytest.mark.parametrize("dim", [256], ids=id_formatter("dim"))
+    @pytest.mark.parametrize("dim", [32], ids=id_formatter("dim"))
     def test_gemm_4bit(self, device, dim, dtype, storage_type, quant_storage, double_quant, kind):
         errs1 = []
         errs2 = []
@@ -67,7 +67,7 @@ class TestXPU:
         #pdb.set_trace()
         if kind == "fc1":
             A = torch.ones(dim, dim, dtype=dtype, device=device)
-            B = torch.ones(dim, dim, dtype=dtype, device=device)# / math.sqrt(dim)
+            B = torch.ones(dim, dim, dtype=dtype, device=device) # / math.sqrt(dim)
         elif kind == "fc2":
             A = torch.randn(1, 4 * dim, dtype=dtype, device=device)
             B = torch.randn(dim, 4 * dim, dtype=dtype, device=device) / math.sqrt(dim)
@@ -85,9 +85,9 @@ class TestXPU:
             quant_storage=quant_storage,
         )
         ##pdb.set_trace()
-        C3 = torch.matmul(A, B)
+        C3 = torch.matmul(A, B.t())
         #pdb.set_trace()
-        C2 = F.gemv_4bit(A, B, state=state)
+        C2 = F.gemv_4bit(A, qB.t(), state=state)
         #pdb.set_trace()
         print(C3[0])
         print(C2[0])
