@@ -275,7 +275,19 @@ public:
         DstArray* pDstArr = reinterpret_cast<DstArray*>(pDst) + i;
 		//TODO(Xiaoli): LUT convert
         //*pDstArr = Converter::convert(*pSrcArr);
-        (*pDstArr)[0] = static_cast<DstType>(quant_map[(*pSrcArr)[0]]);
+/*              for (int k = 0; k < num_values_8bit / 4; k++) {
+        local_B[k * 2] =
+            quant_map[local_B_4bit[(i * num_values_8bit / 4) + k] >> 4] *
+            local_absmax;
+        local_B[k * 2 + 1] =
+            quant_map[local_B_4bit[(i * num_values_8bit / 4) + k] & 0x0F] *
+            local_absmax;
+      }*/
+        #pragma unroll
+        for(int j = 0; j < num_elements; j++){
+          (*pDstArr)[j] = static_cast<DstType>(quant_map[(*pSrcArr)[j] >> 4]);
+          (*pDstArr)[j+1] = static_cast<DstType>(quant_map[(*pSrcArr)[j] & 0x0F]);
+        }
       }
     }
 
