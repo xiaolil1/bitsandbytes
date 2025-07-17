@@ -275,7 +275,7 @@ public:
         DstArray* pDstArr = reinterpret_cast<DstArray*>(pDst) + i;
 		//TODO(Xiaoli): LUT convert
         //*pDstArr = Converter::convert(*pSrcArr);
-        *pDstArr = quant_map[*pSrcArr];
+        (*pDstArr)[0] = static_cast<DstType>(quant_map[(*pSrcArr)[0]]);
       }
     }
 
@@ -315,7 +315,7 @@ public:
     //TODO(Xiaoli): FIX ME
     SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
-    float* quant_map = *reinterpret_cast<float>(smem_buf);
+    float* quant_map = reinterpret_cast<float*>(smem_buf);
     // Preconditions
     static_assert(cute::rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
@@ -536,31 +536,27 @@ std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!
   dim3 const grid = GemmKernel::get_grid_shape(params);
   //printf("Host Grid: (%d, %d, %d)\n", grid.x, grid.y, grid.z);
   //printf("Host Block: (%d, %d, %d)\n", block.x, block.y, block.z);
-#if 1  
-  cutlass::kernel_launch<GemmKernel, Params>(grid, block, smem_size, stream, params, false);
-#else
-        constexpr bool allow_subgroup_size_prop = true;
-        auto kernel_props = [] {
+  constexpr bool allow_subgroup_size_prop = true;
+  auto kernel_props = [] {
 std::cout<<"sycl-else-log1  ----------\n";
-            return syclcompat::experimental::kernel_properties{
-              sycl::ext::oneapi::experimental::sub_group_size<DispatchPolicy::SubgroupSize>
-            };
-        }();
+      return syclcompat::experimental::kernel_properties{
+        sycl::ext::oneapi::experimental::sub_group_size<DispatchPolicy::SubgroupSize>
+      };
+  }();
 std::cout<<"sycl-else-log2 ----------\n";
-        syclcompat::experimental::launch_properties launch_props {
-          sycl::ext::oneapi::experimental::work_group_scratch_size(smem_size),
-        };
+  syclcompat::experimental::launch_properties launch_props {
+    sycl::ext::oneapi::experimental::work_group_scratch_size(smem_size),
+  };
 std::cout<<"sycl-else-log3  ----------\n";
-        const syclcompat::dim3 sycl_block(block.x, block.y, block.z);
-        const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);
-        syclcompat::experimental::launch_policy policy{
-          sycl_grid, sycl_block, launch_props, kernel_props
-        };
+  const syclcompat::dim3 sycl_block(block.x, block.y, block.z);
+  const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);
+  syclcompat::experimental::launch_policy policy{
+    sycl_grid, sycl_block, launch_props, kernel_props
+  };
 std::cout<<"log else-2  ----------\n";
-        auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
+  auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
 std::cout<<"sycl-else-log4  ----------\n";
-        EventManager::getInstance().addEvent(event);
-#endif        
+  EventManager::getInstance().addEvent(event);
   syclcompat::wait();
 }
 
