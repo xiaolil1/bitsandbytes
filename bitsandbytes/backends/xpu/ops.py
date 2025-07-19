@@ -76,7 +76,7 @@ def _gemv_4bit_impl(
 ) -> None:
     import pdb
     pdb.set_trace()
-    m = 1 #ct.c_int32(*A.shape[:-1])
+    m = ct.c_int32(*A.shape[:-1])
     n = ct.c_int32(shapeB[0])
     k = ct.c_int32(shapeB[1])
 

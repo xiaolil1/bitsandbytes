@@ -69,7 +69,7 @@ using TiledMma =
                                   Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 
 // Define Mainloop dispatch policy
-constexpr int PipelineStages = 3;
+constexpr int PipelineStages = 0;
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
 static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // sub_group size
 
@@ -140,7 +140,7 @@ using GmemTiledCopyC = CopyOpG2R;
 using GmemTiledCopyD = cute::conditional_t<not cute::is_void_v<ElementD> && not cute::is_void_v<CopyOpR2G>,
                                              CopyOpR2G, XE_2D_U32x8x16_ST_N>;
 
-//TODO(Xiaoli): Maybe legacy, refine me.
+// Calculate subgroup_tile_shape (reminder: not the same thing with "subgroup_size" in sycl!!)
 static constexpr auto BLK_M = get<0>(WorkgroupTileShape{});
 static constexpr auto BLK_N = get<1>(WorkgroupTileShape{});
 static constexpr auto BLK_K = get<2>(WorkgroupTileShape{});
@@ -174,16 +174,14 @@ public:
     int m, n, k;
     T* A;
     uint8_t* B;
-    float *absmax; //TODO(Xiaoli): FIX ME
     float* out;
-    float *datatype;
+    float *datatype; //LUT
 	  
-	  //GemmUniversalMode mode{};
     ProblemShape problem_shape{};
-	
-    //inloopParams mainloop{};
+
 	  Copy_A tiled_copy_a;
     Copy_B tiled_copy_b;
+    Copy_B tiled_copy_b_4bit;
 	  Copy_Scale tiled_copy_scale;
     int group_size;
 	
@@ -309,6 +307,8 @@ public:
   
   CUTLASS_DEVICE
   void operator()(Params const& params, char* smem_buf) {
+    if(cute::thread0()) printf("this is fusion kernel...........\n"); 
+
     int M = params.m;
     int N = params.n;
     int K = params.k;
@@ -316,38 +316,32 @@ public:
     uint8_t* B = params.B;
     float* out = params.out;
     float* datatype = params.datatype;
-    //int blocksize = params.blocksize;
     auto tiled_copy_a = params.tiled_copy_a;
     auto tiled_copy_b = params.tiled_copy_b;
-	auto tiled_copy_scale = params.tiled_copy_scale;
-  if(cute::thread0())
-  printf("this is fusion kernel...........\n"); 
+    auto tiled_copy_b_4bit = params.tiled_copy_b_4bit;
+	  auto tiled_copy_scale = params.tiled_copy_scale;
+
     int L = 1;
     auto problem_size = ProblemShape{M, N, K, L};
-       
-    //TODO(Xiaoli): FIX ME
-    SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
-    float* quant_map = reinterpret_cast<float*>(smem_buf);
     // Preconditions
     static_assert(cute::rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
   	
-    // Get the appropriate blocks for this sub_group -- potential for sub_group locality
     int thread_idx = int(ThreadIdxX());
-//#if 0 
-    //Load Dequat table
+
+     // Load Dequatize LUT and save to SLM, 16 for 4bits
+    float* quant_map = reinterpret_cast<float*>(smem_buf);
     if (thread_idx < 16) {
-      quant_map[thread_idx] = datatype[thread_idx]; //T(datatype[thread_idx]);
+      quant_map[thread_idx] = datatype[thread_idx];
       printf("quant_map[thread_idx] = %f\n", quant_map[thread_idx]); 
     }
     barrier_wait(1);
 
-#if 1 
-    auto blk_shape = TileShape{};
-    int m_coord, n_coord, l_coord;
+    auto blk_shape = TileShape{}; //256,256,32
+    int m_coord, n_coord, l_coord; //block index
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
       if(cute::thread0()) printf("AlongN !!\n");
       m_coord = BlockIdxY();
@@ -359,25 +353,23 @@ public:
       n_coord = BlockIdxY();
       l_coord = BlockIdxZ();
     }
+    auto blk_coord_mnkl = make_coord(m_coord, n_coord, _, l_coord);
     if(cute::thread0()) printf("M = %d, N=%d, K=%d, L=%d, m_coord = %d, n_coord = %d, l_coord = %d, BlockIdxX() = %d, BlockIdxY() = %d, BlockIdxZ() = %d\n",M, N, K, L, m_coord, n_coord, l_coord, BlockIdxX(), BlockIdxY(), BlockIdxZ());
 
-    auto blk_coord_mnkl = make_coord(m_coord, n_coord, _, l_coord);
-    constexpr auto workgroup_shape = WorkgroupTileShape{}; 
-    constexpr auto subgroup_shape = SubgroupTileShape{};   
-    if(cute::thread0())
-      printf("BLK_M = %d, BLK_N = %d, BLK_K = %d, ATOM_M = %d, ATOM_N = %d, ATOM_K = %d, SG_M = %d, SG_N = %d, SG_K = %d\n", BLK_M, BLK_N, BLK_K, ATOM_M, ATOM_N, ATOM_K, SG_M, SG_N, SG_K); 
+    constexpr auto workgroup_shape = WorkgroupTileShape{}; //256, 256, 32 
+    constexpr auto subgroup_tile_shape = SubgroupTileShape{}; // 256/8=32, 256/16=16, 32/16=2  
   
-    Tensor mA_mkl = cute::get_pvc_tensor(make_shape(M,K,L));   //(m,k,l)
-    Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L));   //(n,k,l)
+    Tensor mA_mkl = cute::get_pvc_tensor(make_shape(M,K,L)); //coordinate tensor: 0,1,2....
+    Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L)); //coordinate tensor: 0,1,2....
   
     Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
     Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,l_coord));	
   
-    // Allocate the tiled_mma and the accumulators for the (M,N) subgroup_shape
+    // Allocate the tiled_mma and the accumulators for the (M,N) subgroup_tile_shape
     TiledMma tiled_mma;
  
-    auto expanded_shape = replace<1>(blk_shape, cute::C<2>{} * get<1>(blk_shape));
-    Tensor accumulators = partition_fragment_C(tiled_mma, take<0,2>(expanded_shape)); 
+    //auto expanded_shape = replace<1>(blk_shape, cute::C<2>{} * get<1>(blk_shape));
+    Tensor accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape)); 
     clear(accumulators);
   
     auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(K)), make_shape(K));
@@ -387,6 +379,7 @@ public:
 //Run MainLoop	  
     auto thr_copy_A = tiled_copy_a.get_slice(thread_idx);
     auto thr_copy_B = tiled_copy_b.get_slice(thread_idx);
+    auto thr_copy_B_4bit = tiled_copy_b_4bit.get_slice(thread_idx);
 	  auto thr_copy_scale = tiled_copy_scale.get_slice(thread_idx);
   
     auto sg = syclcompat::get_nd_item<1>().get_sub_group();
@@ -397,7 +390,7 @@ public:
     Tensor tCgA = thr_mma.partition_A(gA);
     Tensor tCgB = thr_mma.partition_B(gB);
 	
-	// Create fragments
+	  // Create fragments
     Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_a, tCgA(_,_,_,0).shape()));
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b, tCgB(_,_,_,0).shape()));
 
@@ -405,12 +398,13 @@ public:
     Tensor fragment_scale_input = make_tensor<NonVoidElementScale>(FragScaleLayout{});
 
     // narrow input fragment
-    Tensor quant_frag = make_tensor<ElementQuant>(decltype(mma_B.layout()){});
+    Tensor mma_B_4bit = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b_4bit, tCgB(_,_,_,0).shape()));
+    Tensor quant_frag = make_tensor<ElementQuant>(decltype(mma_B_4bit.layout()){});
 
-    auto original_shape = tCgB(_,_,_,0).shape();
-    auto expanded_shape_2 = make_shape(cute::get<0>(original_shape), cute::C<2>{} * cute::get<1>(original_shape),cute::get<2>(original_shape));
-    auto expanded_layout = make_fragment_layout(tiled_copy_b, expanded_shape_2);
-    Tensor mma_B_expanded = make_tensor<ElementMMA>(expanded_layout);
+    //auto original_shape = tCgB(_,_,_,0).shape();
+    //auto expanded_shape_2 = make_shape(cute::get<0>(original_shape), cute::C<2>{} * cute::get<1>(original_shape),cute::get<2>(original_shape));
+    //auto expanded_layout = make_fragment_layout(tiled_copy_b, expanded_shape_2);
+    //Tensor mma_B_expanded = make_tensor<ElementMMA>(expanded_layout);
 
     static_assert(std::is_same_v<typename decltype(quant_frag)::value_type, ElementQuant>);
     static_assert(std::is_same_v<typename decltype(mma_A)::value_type, ElementMMA>);
@@ -418,18 +412,17 @@ public:
 
     // Retile for copy
     auto [frag_copy_A, frag_copy_B] = [&](){
-        return std::make_pair(thr_copy_A.retile_D(mma_A), thr_copy_B.retile_D(quant_frag));
+        return std::make_pair(thr_copy_A.retile_D(mma_A), thr_copy_B_4bit.retile_D(quant_frag));
     }();
 
     Tensor copy_tCrS = thr_copy_scale.retile_D(fragment_scale_input);
-    //Tensor copy_tCrZ = thr_copy_zero.retile_D(fragment_zero_input);
     
     // Retile global counting tensors for copies
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
-    Tensor tBgB = thr_copy_B.retile_S(tCgB);
+    Tensor tBgB = thr_copy_B_4bit.retile_S(tCgB);
     
     auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(tiled_copy_a);
-    auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(tiled_copy_b);
+    auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(tiled_copy_b_4bit);
     auto thr_prefetch_A = tiled_prefetch_a.get_slice(thread_idx);
     auto thr_prefetch_B = tiled_prefetch_b.get_slice(thread_idx);
     
@@ -460,37 +453,39 @@ public:
       prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
 
-    const int k_reload_factor = params.group_size / BLK_K;
+    const int k_reload_factor = params.group_size / BLK_K / 2;
     if(cute::thread0()) printf("k_reload_factor = %d\n", k_reload_factor); 
 
     CUTLASS_PRAGMA_UNROLL
     for (int k_tile = 0, k = k_start_idx; k_tile < k_tile_count; ++k_tile, ++k, ++prefetch_k) {
       // Copy gmem to rmem for the first k_tile
       copy(tiled_copy_a, tAgA(_,_,_,k), frag_copy_A);
-      copy(tiled_copy_b, tBgB(_,_,_,k), frag_copy_B);
+      copy(tiled_copy_b_4bit, tBgB(_,_,_,k), frag_copy_B);
 
       copy(tiled_copy_scale, copy_iter_s(_, _, _, k_start_idx + (k_tile / k_reload_factor)), copy_tCrS);
-      dequant(quant_frag, mma_B_expanded, fragment_scale_input, quant_map);
+      //dequant(quant_frag, mma_B_expanded, fragment_scale_input, quant_map);
+      dequant(quant_frag, mma_B, fragment_scale_input, quant_map);
 
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
 
-      cute::gemm(tiled_mma, mma_A, mma_B_expanded, accumulators);
+      cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
     }
+
+    SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>((char*)nullptr);
     CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
-    auto expanded_problem_size = ProblemShape{M, 2 * N, K, 1};
-    auto problem_shape_MNKL = append<4>(expanded_problem_size, 1);
+    //auto expanded_problem_size = ProblemShape{M, 2 * N, K, 1};
+    auto problem_shape_MNKL = append<4>(problem_size, 1);
     epilogue(
       problem_shape_MNKL,
-      subgroup_shape, // TODO(codeplay): Inconsistency here w/ blk_coord_mnkl
+      subgroup_tile_shape,
       blk_coord_mnkl,
       accumulators,
       tiled_mma,
       thread_idx
     );
-#endif    
   }    
 };
 
@@ -532,9 +527,14 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   StrideB stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n, k, l));
   auto mB_nkl = make_tensor(make_gmem_ptr(B), make_layout(make_shape(n, k, l), stride_B));
   Copy_B tiled_copy_b{Copy_B{}.with(mB_nkl)};
+
+  StrideB stride_B_4bit = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n, k/2, l));
+  auto mB_nkl_4bit = make_tensor(make_gmem_ptr(B), make_layout(make_shape(n, k/2, l), stride_B));
+  Copy_B tiled_copy_b_4bit{Copy_B{}.with(mB_nkl_4bit)};
   
   params.tiled_copy_a = tiled_copy_a;
   params.tiled_copy_b = tiled_copy_b;
+  params.tiled_copy_b_4bit = tiled_copy_b_4bit;
  
   const int scale_k = cute::ceil_div(k, blocksize);
   const int dq_mn_size = n;
