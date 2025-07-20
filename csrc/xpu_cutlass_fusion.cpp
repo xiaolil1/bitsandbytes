@@ -253,6 +253,8 @@ public:
 
 #if 1
     auto const& src = tCrA_load(_, _, _);
+    //auto src = src_(_, cute::take(src_.size(1)/2), _);
+    //auto src = src_(_, _0{size_t(src_.size(1)/2)}, _);
     auto const& dst = tCrA_mma(_, _, _);
     auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
     auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
@@ -260,17 +262,16 @@ public:
 
   // TODO(Codeplay): (perf) consider replacing `pack` with `num_elements` here - See xe_flash_attn_mma.hpp
     constexpr int pack = decltype(select_packing<SrcType, DstType, num_elements>::value())::value;
-      //if(cute::thread0()) printf("Cosize, sizeof_bits_v<SrcType> = %d, sizeof_bits_v<DstType> = %d, cute::min(sizeof_bits_v<SrcType>, sizeof_bits_v<DstType>) = %d, 32 / cute::min(sizeof_bits_v<SrcType>, sizeof_bits_v<DstType>) = %d\n", num_elements, sizeof_bits_v<SrcType>, sizeof_bits_v<DstType>, cute::min(sizeof_bits_v<SrcType>, sizeof_bits_v<DstType>), 32 / cute::min(sizeof_bits_v<SrcType>, sizeof_bits_v<DstType>));
       int src_size = sizeof_bits_v<SrcType>;
       int dst_size = sizeof_bits_v<DstType>;
       if(cute::thread0()) printf("Cosize = %d, src_size = %d, dst_size = %d\n", num_elements, src_size, dst_size);
     //using Converter = cutlass::NumericArrayConverter<DstType, SrcType, pack, cutlass::FloatRoundStyle::round_to_nearest>;
     using SrcArray = cutlass::Array<SrcType, pack>;
-    using DstArray = cutlass::Array<DstType, pack * 2>;
+    using DstArray = cutlass::Array<DstType, pack>;
     constexpr int iters = num_elements / pack;
 
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < iters; ++i) {
+    for (int i = 0; i < iters / 2 ; ++i) {
       SrcArray const* pSrcArr = reinterpret_cast<SrcArray const*>(pSrc) + i;
       DstArray* pDstArr = reinterpret_cast<DstArray*>(pDst) + i * 2;
       //*pDstArr = Converter::convert(*pSrcArr);
@@ -425,6 +426,7 @@ public:
     // tCgA: t(tensor) C(compute) gA(globaleA); 
     // tCsA: s (shared memory)
     // tCrA: r (register)
+    // 虽然每个线程参与多个 Atom 的计算，但 tCgB 的 shape 是针对单个Atom 的线程分片
     Tensor tCgA = thr_mma.partition_A(gA);
     Tensor tCgB = thr_mma.partition_B(gB);
     Tensor tCgB_4bit = thr_mma.partition_B(gB_4bit);
@@ -502,7 +504,7 @@ public:
     //      partition_S: 生成逻辑视图（源布局），不实际移动数据
     //      partition_D: 实际复制数据到目标布局（如共享内存→寄存器）
     auto pAgA = thr_prefetch_A.partition_S(gA);
-    auto pBgB = thr_prefetch_B.partition_S(gB);
+    auto pBgB = thr_prefetch_B.partition_S(gB_4bit);
   
 ////
 //// Mainloop
@@ -515,7 +517,7 @@ public:
 
     Tensor copy_iter_s = [&](){
         return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)), // 初始坐标：(n_coord, 0, l_coord)，表示从 N 维的 n_coord 开始，K 维从 0 开始
-                           make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count), // 迭代器的逻辑形状：[2, 2, 1, k_tile_count]，表示每次迭代生成 2x2x1 的坐标块，共 k_tile_count 次
+                           make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count/2), // 迭代器的逻辑形状：[2, 2, 1, k_tile_count]，表示每次迭代生成 2x2x1 的坐标块，共 k_tile_count 次
                                        make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{}))); // 步长 [16, 32, 0, 1]：
                                                                                                            //   E<0>{} * _16{}: 第一维度（N）的步长为 16;
                                                                                                            //   E<0>{} * _32{}：第二维度（K）的步长为 32;
@@ -529,7 +531,7 @@ public:
   #define CUTLASS_ENABLE_DEBUG_PRINTS 1
   #if CUTLASS_ENABLE_DEBUG_PRINTS
   #define PRINT(x) print(#x ": "); print(x); print("\n");
-    if (cute::thread0()){ 
+    if (cute::thread0()){
         print("======================= A: \n");
         print("  gA   : "); print(gA);   print("\n");
         print("  tCgA : "); print(tCgA); print("\n");
@@ -558,6 +560,7 @@ public:
       }
   #undef PRINT
   #endif
+
     // crd2idx: 将多维逻辑坐标转换为线性索引
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = 0;
@@ -639,12 +642,13 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   auto mA_mkl = make_tensor(make_gmem_ptr(A), make_layout(make_shape(m, k, l), stride_A));
   Copy_A tiled_copy_a{Copy_A{}.with(mA_mkl)};
 
+  // make_cute_packed_stride: 根据张量形状自动生成内存步长（Stride）的关键函数，其核心目标是优化内存访问模式以适配硬件指令
   StrideB stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n, k, l));
   auto mB_nkl = make_tensor(make_gmem_ptr(B), make_layout(make_shape(n, k, l), stride_B));
   Copy_B tiled_copy_b{Copy_B{}.with(mB_nkl)};
 
   StrideB stride_B_4bit = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n, k/2, l));
-  auto mB_nkl_4bit = make_tensor(make_gmem_ptr(B), make_layout(make_shape(n, k/2, l), stride_B));
+  auto mB_nkl_4bit = make_tensor(make_gmem_ptr(B), make_layout(make_shape(n, k/2, l), stride_B_4bit));
   Copy_B tiled_copy_b_4bit{Copy_B{}.with(mB_nkl_4bit)};
   
   params.tiled_copy_a = tiled_copy_a;
