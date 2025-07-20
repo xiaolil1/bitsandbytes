@@ -69,7 +69,7 @@ using TiledMma =
                                   Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 
 // Define Mainloop dispatch policy
-constexpr int PipelineStages = 0;
+constexpr int PipelineStages = 3;
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
 static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // sub_group size
 
@@ -110,11 +110,20 @@ using ClusterShape = typename DispatchPolicy::ClusterShape;
 // Define Copy
 using CopyThreadShape = Shape<_1, Int<SubgroupSize>>;
 
+// **XE_2D_U16x32x32_LD_N**：
+// U16：每个线程加载 16 个元素。
+// 32x32：每个线程块加载 32x32 的分块。
+// LD_N：行主序加载（LD_T 为列主序）。
 using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
 using StrideA = cutlass::gemm::TagToStrideA_t<cutlass::layout::RowMajor>;
 using traits_load_A = Copy_Traits<GmemTiledCopyA, StrideA>;
 using atom_load_A = Copy_Atom<traits_load_A, ElementA>;
+// **shape_div**：将分块形状 BlockShape 除以线程布局 CopyThreadShape，得到每个线程的子块形状。
 using val_layout_load_A = decltype(make_layout(shape_div(typename traits_load_A::BlockShape{}, CopyThreadShape{})));
+// 生成分块拷贝策略 Copy_A，包含：
+// atom_load_A：原子拷贝操作。
+// Layout<CopyThreadShape>：线程布局。
+// val_layout_load_A：寄存器片段布局
 using Copy_A = decltype(make_tiled_copy(atom_load_A{}, Layout<CopyThreadShape>{}, val_layout_load_A{}));
 
 using GmemTiledCopyB = XE_2D_U8x32x32_LD_V;  // U8  (1-byte) block copy for 8bit-B (narrower type)
@@ -244,7 +253,7 @@ public:
     auto const& dst = tCrA_mma(_, _, _);
     auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
     auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
-    constexpr int num_elements = decltype(size(src))::value;
+    constexpr int num_elements = decltype(size(src))::value / 2;
 
   // TODO(Codeplay): (perf) consider replacing `pack` with `num_elements` here - See xe_flash_attn_mma.hpp
     constexpr int pack = decltype(select_packing<SrcType, DstType, num_elements>::value())::value;
@@ -332,7 +341,7 @@ public:
   	
     int thread_idx = int(ThreadIdxX());
 
-     // Load Dequatize LUT and save to SLM, 16 for 4bits
+//// Load Dequatize LUT and save to SLM, 16 for 4bits
     float* quant_map = reinterpret_cast<float*>(smem_buf);
     if (thread_idx < 16) {
       quant_map[thread_idx] = datatype[thread_idx];
@@ -340,7 +349,9 @@ public:
     }
     barrier_wait(1);
 
+//// Get the block level coordinate(indexing) for current block
     auto blk_shape = TileShape{}; //256,256,32
+    auto blk_shape_4bit = Shape<_256, _256, _16>{}; //TileShape{}; //256,256,32
     int m_coord, n_coord, l_coord; //block index
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
       if(cute::thread0()) printf("AlongN !!\n");
@@ -357,38 +368,58 @@ public:
     if(cute::thread0()) printf("M = %d, N=%d, K=%d, L=%d, m_coord = %d, n_coord = %d, l_coord = %d, BlockIdxX() = %d, BlockIdxY() = %d, BlockIdxZ() = %d\n",M, N, K, L, m_coord, n_coord, l_coord, BlockIdxX(), BlockIdxY(), BlockIdxZ());
 
     constexpr auto workgroup_shape = WorkgroupTileShape{}; //256, 256, 32 
-    constexpr auto subgroup_tile_shape = SubgroupTileShape{}; // 256/8=32, 256/16=16, 32/16=2  
+    constexpr auto subgroup_tile_shape = SubgroupTileShape{}; // number of atom level workgroup: 256/8=32, 256/16=16, 32/16=2  
   
     Tensor mA_mkl = cute::get_pvc_tensor(make_shape(M,K,L)); //coordinate tensor: 0,1,2....
     Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L)); //coordinate tensor: 0,1,2....
+    Tensor mB_nkl_4bit = cute::get_pvc_tensor(make_shape(N,K/2,L)); //coordinate tensor: 0,1,2....
   
     Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
     Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,l_coord));	
+    Tensor gB_4bit = local_tile(mB_nkl_4bit, select<1,2>(blk_shape_4bit), make_coord(n_coord,_,l_coord / 2));	
   
-    // Allocate the tiled_mma and the accumulators for the (M,N) subgroup_tile_shape
+//// Allocate the tiled_mma and the accumulators for the (M,N) subgroup_tile_shape
     TiledMma tiled_mma;
- 
-    //auto expanded_shape = replace<1>(blk_shape, cute::C<2>{} * get<1>(blk_shape));
+    // partition_fragment_C： 将累加器 C 划分为线程私有的寄存器片段
+    // tiled_mma：分块策略（含线程布局）[ThreadsM, ThreadsK]。
+    // tile_shape：子块形状 [TileM, TileK]。
+    // 输出 FragmentC，每个线程处理 (TileM/ThreadsM, TileK/ThreadsK) 的子区域。
+    // 分块需与线程布局兼容。
+    // 寄存器片段大小需适配硬件限制。
     Tensor accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape)); 
     clear(accumulators);
-  
+
+//// Create K slicing tiling iterator and count
+    // make_shape(128)：创建一个单维度形状 [128]，等价于数学上的线性数组。
+    // idx2crd(0, shape)：将线性索引 0 映射到该形状的逻辑坐标。
+    // 对于单维度，坐标直接等于索引值。
+    // 使用方式：int k = get<0>(coord);  // k = 0
+    // cute::make_coord_iterator(A, B): 生成起始坐标A，步长B的迭代器
     auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(K)), make_shape(K));
-    int  k_tile_count = ceil_div(K, get<2>(workgroup_shape));
+    int k_tile_count = ceil_div(K, get<2>(workgroup_shape));
     if(cute::thread0()) printf("k_tile_count = %d\n", k_tile_count);
          
-//Run MainLoop	  
-    auto thr_copy_A = tiled_copy_a.get_slice(thread_idx);
+//////Run MainLoop//////
+    // thread_idx: linear index (threadIdx.x + blockDim.x * threadIdx.y)
+    // thr_copy_A : 当前线程负责的数据子块
+    auto thr_copy_A = tiled_copy_a.get_slice(thread_idx); //A 的拷贝分片
     auto thr_copy_B = tiled_copy_b.get_slice(thread_idx);
     auto thr_copy_B_4bit = tiled_copy_b_4bit.get_slice(thread_idx);
 	  auto thr_copy_scale = tiled_copy_scale.get_slice(thread_idx);
   
     auto sg = syclcompat::get_nd_item<1>().get_sub_group();
     auto first_thread_in_sg_idx = sg.get_group_linear_id() * DispatchPolicy::SubgroupSize;
-    auto thr_mma = tiled_mma.get_slice(first_thread_in_sg_idx);
+    auto thr_mma = tiled_mma.get_slice(first_thread_in_sg_idx); //MMA 线程分片
   
-    // Partition global counting tensors for MMA
+    // 获取全局数据的线程分片，Partition global counting tensors for MMA
+    // partition_A 是一个将矩阵 A 的逻辑分块（Tile）划分为线程私有的数据片段（Fragment) 的操作，主要用于矩阵乘法（GEMM）核心里线程级的数据分配
+    // 将全局矩阵 A 的逻辑分块（gA）划分为当前线程（thr_mma）需要处理的寄存器片段
+    // thr_mma：线程的 MMA（矩阵乘累加）分片
+    // gA：矩阵 A 的全局或共享内存分块
+    // tCgA，一个逻辑张量，表示当前线程负责的寄存器片段, 形状由 TiledMMA 策略决定
     Tensor tCgA = thr_mma.partition_A(gA);
     Tensor tCgB = thr_mma.partition_B(gB);
+    Tensor tCgB_4bit = thr_mma.partition_B(gB_4bit);
 	
 	  // Create fragments
     Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_a, tCgA(_,_,_,0).shape()));
@@ -398,13 +429,8 @@ public:
     Tensor fragment_scale_input = make_tensor<NonVoidElementScale>(FragScaleLayout{});
 
     // narrow input fragment
-    Tensor mma_B_4bit = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b_4bit, tCgB(_,_,_,0).shape()));
+    Tensor mma_B_4bit = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b_4bit, tCgB_4bit(_,_,_,0).shape()));
     Tensor quant_frag = make_tensor<ElementQuant>(decltype(mma_B_4bit.layout()){});
-
-    //auto original_shape = tCgB(_,_,_,0).shape();
-    //auto expanded_shape_2 = make_shape(cute::get<0>(original_shape), cute::C<2>{} * cute::get<1>(original_shape),cute::get<2>(original_shape));
-    //auto expanded_layout = make_fragment_layout(tiled_copy_b, expanded_shape_2);
-    //Tensor mma_B_expanded = make_tensor<ElementMMA>(expanded_layout);
 
     static_assert(std::is_same_v<typename decltype(quant_frag)::value_type, ElementQuant>);
     static_assert(std::is_same_v<typename decltype(mma_A)::value_type, ElementMMA>);
@@ -443,6 +469,41 @@ public:
                            make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count), 
                                        make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{})));
     }();
+
+//  #define LOG_GROUP 1
+//  #define LOG_THREAD 1
+  #define CUTLASS_ENABLE_DEBUG_PRINTS 1
+  #if CUTLASS_ENABLE_DEBUG_PRINTS
+  #define PRINT(x) print(#x ": "); print(x); print("\n");
+    if (cute::thread0()){ //(cutlass::thread(LOG_THREAD, LOG_GROUP)) {
+        print("======================= A: \n");
+        print("  gA   : "); print(gA);   print("\n");
+        print("  tCgA : "); print(tCgA); print("\n");
+        print("  tAgA : "); print(tAgA); print("\n");
+        print("  mma_A : "); print(mma_A); print("\n");
+        print("  frag_copy_A : "); print(frag_copy_A); print("\n");
+
+        print("=====================  B :\n");
+        print("  gB : ");   print(gB);   print("\n");
+        print("  gB_4bit : ");   print(gB_4bit);   print("\n");
+        print("  tCgB : "); print(tCgB); print("\n");
+        print("  tCgB_4bit : "); print(tCgB_4bit); print("\n");
+        print("  tBgB : "); print(tBgB); print("\n");
+        print("  mma_B : "); print(mma_B); print("\n");
+        print("  mma_B_4bit : "); print(mma_B_4bit); print("\n");
+        print("  frag_copy_B : "); print(frag_copy_B); print("\n");
+
+        print("=====================  Config: \n");
+        print("  threads per workgroup : "); print(MaxThreadsPerBlock);  print("\n");
+        print("  SubgroupTileShape     : "); print(SubgroupTileShape{}); print("\n");
+
+        print("  tiled_prefetch_a :    "); print(tiled_prefetch_a); print("\n");
+        print("  tiled_prefetch_b :    "); print(tiled_prefetch_b); print("\n");
+        print("  pAgA :    "); print(pAgA); print("\n");
+        print("  pBgB :    "); print(pBgB); print("\n");
+      }
+  #undef PRINT
+  #endif
 
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = 0;
