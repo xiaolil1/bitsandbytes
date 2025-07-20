@@ -149,30 +149,33 @@ using GmemTiledCopyC = CopyOpG2R;
 using GmemTiledCopyD = cute::conditional_t<not cute::is_void_v<ElementD> && not cute::is_void_v<CopyOpR2G>,
                                              CopyOpR2G, XE_2D_U32x8x16_ST_N>;
 
-// Calculate subgroup_tile_shape (reminder: not the same thing with "subgroup_size" in sycl!!)
-static constexpr auto BLK_M = get<0>(WorkgroupTileShape{});
-static constexpr auto BLK_N = get<1>(WorkgroupTileShape{});
-static constexpr auto BLK_K = get<2>(WorkgroupTileShape{});
-
-static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape());
-static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape());
-static constexpr auto ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape());
-
-static_assert(BLK_M % TiledMma{}.template tile_size_mnk<0>() == 0, "TiledMma permutation size must match block size.");
-static_assert(BLK_N % TiledMma{}.template tile_size_mnk<1>() == 0, "TiledMma permutation size must match block size.");
-static_assert(BLK_K % TiledMma{}.template tile_size_mnk<2>() == 0, "TiledMma permutation size must match block size.");
-
-static constexpr auto SG_M = ceil_div(BLK_M, ATOM_M);
-static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N);
-static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K);
-using SubgroupTileShape = Shape<decltype(SG_M), decltype(SG_N), decltype(SG_K)>;
-
-static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K; //32
-static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
-
 template <typename T, int BITS>
 class kgemm_4bit_inference_cutlass_dequant {
 public:
+  // Calculate subgroup_tile_shape (reminder: not the same thing with "subgroup_size" in sycl!!)
+  static constexpr auto BLK_M = get<0>(WorkgroupTileShape{});
+  static constexpr auto BLK_N = get<1>(WorkgroupTileShape{});
+  static constexpr auto BLK_K = get<2>(WorkgroupTileShape{});
+  
+  //Threads number 
+  static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr auto ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  
+  static_assert(BLK_M % TiledMma{}.template tile_size_mnk<0>() == 0, "TiledMma permutation size must match block size.");
+  static_assert(BLK_N % TiledMma{}.template tile_size_mnk<1>() == 0, "TiledMma permutation size must match block size.");
+  static_assert(BLK_K % TiledMma{}.template tile_size_mnk<2>() == 0, "TiledMma permutation size must match block size.");
+  
+  //sub-tile shape
+  static constexpr auto SG_M = ceil_div(BLK_M, ATOM_M);
+  static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N);
+  static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K);
+  using SubgroupTileShape = Shape<decltype(SG_M), decltype(SG_N), decltype(SG_K)>;
+  
+  //Total Threads number
+  static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K; //32
+  static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
+
   // Kernel level shared memory storage
   struct SharedStorage {
     using EpilogueTensorStorage = typename CollectiveEpilogue::TensorStorage;
@@ -374,6 +377,8 @@ public:
     Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L)); //coordinate tensor: 0,1,2....
     Tensor mB_nkl_4bit = cute::get_pvc_tensor(make_shape(N,K/2,L)); //coordinate tensor: 0,1,2....
   
+    // local_tile: 从全局张量中提取线程块（CTA）级别的局部子块
+    // gA: 逻辑视图（无实际内存分配）
     Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
     Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,l_coord));	
     Tensor gB_4bit = local_tile(mB_nkl_4bit, select<1,2>(blk_shape_4bit), make_coord(n_coord,_,l_coord / 2));	
@@ -417,16 +422,21 @@ public:
     // thr_mma：线程的 MMA（矩阵乘累加）分片
     // gA：矩阵 A 的全局或共享内存分块
     // tCgA，一个逻辑张量，表示当前线程负责的寄存器片段, 形状由 TiledMMA 策略决定
+    // tCgA: t(tensor) C(compute) gA(globaleA); 
+    // tCsA: s (shared memory)
+    // tCrA: r (register)
     Tensor tCgA = thr_mma.partition_A(gA);
     Tensor tCgB = thr_mma.partition_B(gB);
     Tensor tCgB_4bit = thr_mma.partition_B(gB_4bit);
 	
-	  // Create fragments
+//// Create fragments：将全局或共享内存中的数据分块转换为适合硬件加速器（如 Tensor Core）计算的寄存器格式
+    // make_fragment_layout: 为寄存器片段（Fragment）创建内存布局（Layout），确保数据在寄存器中的排布符合硬件指令（如 Tensor Core）的要求
+    // 提取分块形状（tCgA） → 生成寄存器布局（make_fragment_layout） → 创建逻辑张量（make_tensor）
     Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_a, tCgA(_,_,_,0).shape()));
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b, tCgB(_,_,_,0).shape()));
 
-    using FragScaleLayout = Layout<Shape<_2, _2, _1>>;
-    Tensor fragment_scale_input = make_tensor<NonVoidElementScale>(FragScaleLayout{});
+    using FragScaleLayout = Layout<Shape<_2, _2, _1>>; // scale 寄存器分布
+    Tensor fragment_scale_input = make_tensor<NonVoidElementScale>(FragScaleLayout{}); // 创建scale 寄存器张量
 
     // narrow input fragment
     Tensor mma_B_4bit = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b_4bit, tCgB_4bit(_,_,_,0).shape()));
@@ -436,46 +446,90 @@ public:
     static_assert(std::is_same_v<typename decltype(mma_A)::value_type, ElementMMA>);
     static_assert(std::is_same_v<typename decltype(mma_B)::value_type, ElementMMA>);
 
-    // Retile for copy
+//// Retile for copy
+    // retile_D: 将数据从一种布局（如共享内存）转换为另一种布局（如寄存器片段），确保数据在寄存器中的排列符合硬件指令（如 Tensor Core）的要求
+    // 为什么需要 retile_D？共享内存的布局（如行主序 Stride<_1,_128>）可能与硬件指令（如 Tensor Core 的 8x8 分块）不兼容, 通过 retile_D 将数据重排为寄存器需要的布局（如 Stride<_1,_8>）
+    // D（Destination）：数据最终需要适配的布局（通常是寄存器布局）
+    // thr_copy_A.retile_D(mma_A): 将线程分片的数据（thr_copy_A）从原始布局（共享内存的行主序）重映射为目标布局（mma_A 的寄存器布局）。
+    // frag_copy_A: 数据按 mma_A 的布局重新排列后的寄存器片段
+    // code Analyze:
+    //   (1) Lambda 表达式 [&](){ ... }()
+    //     [&]：捕获当前作用域的所有变量（按引用）。
+    //     std::make_pair：返回 frag_copy_A 和 frag_copy_B 的元组。
+    //     立即执行：() 表示直接调用该 Lambda。
+    //   (2) thr_copy_A.retile_D(mma_A)
+    //     作用：将 thr_copy_A 的数据按 mma_A 的布局重排到寄存器。
+    //     底层操作：
+    //       从共享内存读取数据。
+    //       按 mma_A.layout() 的步长（如 Stride<_1,_8>）重新排列。
+    //       写入寄存器片段 frag_copy_A。
+    //   (3) thr_copy_B_4bit.retile_D(quant_frag)
+    //     作用：将 4-bit 量化的 thr_copy_B_4bit 数据解压并按 quant_frag 布局重排。
+    //     特殊处理：
+    //       4-bit 解压：将每字节的 2 个 4-bit 数值解压为 2 个 8-bit 数值。
+    //       布局适配：确保解压后的数据符合 MMA 指令的输入要求（如 int8 或 fp16）。   
+    //   (4) 为什么需要 make_pair?: C++ 函数（或 Lambda）只能返回一个值，无法直接返回多个独立对象。 std::pair 或 std::tuple 将多个值封装为单个对象。允许 Lambda 函数通过单一 return 返回多个值。
     auto [frag_copy_A, frag_copy_B] = [&](){
         return std::make_pair(thr_copy_A.retile_D(mma_A), thr_copy_B_4bit.retile_D(quant_frag));
     }();
 
     Tensor copy_tCrS = thr_copy_scale.retile_D(fragment_scale_input);
     
-    // Retile global counting tensors for copies
+//// Retile global counting tensors for copies: 
+    // retile_D：将数据 物理复制到目标布局（如寄存器）。
+    // retile_S：仅生成一个 逻辑视图，不实际移动数据（类似 reinterpret_cast）
+    // 生成一个逻辑视图 tAgA，其形状和步长与 tCgA 相同，但数据仍存储在原始位置（共享内存）
+    // 共享内存 → retile_S → 逻辑视图 (next step later → 寄存器 (实际复制))
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
     Tensor tBgB = thr_copy_B_4bit.retile_S(tCgB);
-    
+
+//// Prepare for prefetch
+    // BLK_M, BLK_N, BLK_K, Num_SGs: Gemm Tile Atom information.
+    // tiled_copy_a: Copy Atom information
+    // prefetch_selector: 选择适合硬件架构的预取策略
     auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(tiled_copy_a);
     auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(tiled_copy_b_4bit);
+    // get_slice: 获取当前线程负责的预取分片
     auto thr_prefetch_A = tiled_prefetch_a.get_slice(thread_idx);
     auto thr_prefetch_B = tiled_prefetch_b.get_slice(thread_idx);
     
     // Partition global tile for prefetch
+    // partition_S：将全局数据划分为预取分片，生成逻辑视图（不实际移动数据）
+    // pAgA 和 pBgB：线程私有的全局内存分片视图，用于后续预取操作
+    // code analyze:
+    //   (1) 预取（Prefetch）的作用: 隐藏延迟：在计算当前分块时，异步预取下一个分块的数据到缓存或共享内存。
+    //   (2) partition_S vs partition_D:
+    //      partition_S: 生成逻辑视图（源布局），不实际移动数据
+    //      partition_D: 实际复制数据到目标布局（如共享内存→寄存器）
     auto pAgA = thr_prefetch_A.partition_S(gA);
     auto pBgB = thr_prefetch_B.partition_S(gB);
   
-    //
-    // Mainloop
-    //
+////
+//// Mainloop
+////
+    // 在矩阵乘法（GEMM）中动态计算每个线程块（CTA）需要处理的数据分块位置
     auto [m_idx, n_idx, k_idx, l_idx] = blk_coord_mnkl;
-    m_coord = m_idx * BLK_M + (get_sub_group_id() / ATOM_N) * SG_M;
-    n_coord = n_idx * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
+    m_coord = m_idx * BLK_M + (get_sub_group_id() / ATOM_N) * SG_M; // m_idx * BLK_M：分块在 M 维度的起始全局坐标; get_sub_group_id() / ATOM_N) * SG_M：子组在 M 维度的偏移（用于细粒度并行） 
+    n_coord = n_idx * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N; // n_idx * BLK_N：分块在 N 维度的起始全局坐标; (get_sub_group_id() % ATOM_N) * SG_N：子组在 N 维度的偏移
     l_coord = l_idx;
 
     Tensor copy_iter_s = [&](){
-        return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)),
-                           make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count), 
-                                       make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{})));
+        return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)), // 初始坐标：(n_coord, 0, l_coord)，表示从 N 维的 n_coord 开始，K 维从 0 开始
+                           make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count), // 迭代器的逻辑形状：[2, 2, 1, k_tile_count]，表示每次迭代生成 2x2x1 的坐标块，共 k_tile_count 次
+                                       make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{}))); // 步长 [16, 32, 0, 1]：
+                                                                                                           //   E<0>{} * _16{}: 第一维度（N）的步长为 16;
+                                                                                                           //   E<0>{} * _32{}：第二维度（K）的步长为 32;
+                                                                                                           //   0{}：第三维度（L）的步长为 0（固定）;
+                                                                                                           //   E<1>{} * _1{}：第四维度（迭代次数）的步长为 1.
+                                                                                                           // E<0>{} 是一个编译时表达式，用于表示步长（Stride）或布局（Layout）中的占位符或动态值
+                                                                                                           //   E<N>：一个模板类，表示第 N 维的步长或索引，通常用于动态形状或步长的占位符
+                                                                                                           //   E<0>{}：表示第 0 维（最内层维度）的动态步长或索引值，具体值在运行时确定
     }();
 
-//  #define LOG_GROUP 1
-//  #define LOG_THREAD 1
   #define CUTLASS_ENABLE_DEBUG_PRINTS 1
   #if CUTLASS_ENABLE_DEBUG_PRINTS
   #define PRINT(x) print(#x ": "); print(x); print("\n");
-    if (cute::thread0()){ //(cutlass::thread(LOG_THREAD, LOG_GROUP)) {
+    if (cute::thread0()){ 
         print("======================= A: \n");
         print("  gA   : "); print(gA);   print("\n");
         print("  tCgA : "); print(tCgA); print("\n");
@@ -504,7 +558,7 @@ public:
       }
   #undef PRINT
   #endif
-
+    // crd2idx: 将多维逻辑坐标转换为线性索引
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = 0;
 
