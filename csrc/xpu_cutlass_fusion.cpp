@@ -261,11 +261,11 @@ public:
     auto const& dst = tCrA_mma(_, _, _);
     auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
     auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
-    auto pA = const_cast<DstType*>(raw_pointer_cast(A_ref.data()));
+    //auto pA = const_cast<DstType*>(raw_pointer_cast(A_ref.data()));
     constexpr int num_elements = decltype(size(src))::value / 2;
     for(int i=0; i<num_elements * 2; i++){
-      if(cute::thread0())
-      printf("ThreadIdxX() = %d, i = %d, *(pSrc + i) = %d, *(pA + i*2) = %f, *(pA + i*2+1) = %f\n", ThreadIdxX(), i, static_cast<int>(*(pSrc + i)), static_cast<int>(*(pA + i*2)), static_cast<int>(*(pA + i*2+1)));
+      //if(cute::thread0())
+      //printf("ThreadIdxX() = %d, i = %d, *(pSrc + i) = %d, *(pA + i*2) = %f, *(pA + i*2+1) = %f\n", ThreadIdxX(), i, static_cast<int>(*(pSrc + i)), static_cast<int>(*(pA + i*2)), static_cast<int>(*(pA + i*2+1)));
     }
 
   // TODO(Codeplay): (perf) consider replacing `pack` with `num_elements` here - See xe_flash_attn_mma.hpp
@@ -280,8 +280,8 @@ public:
       //if(cute::thread0()) printf("*(pSrc + i) = %d, src_value = %d\n",static_cast<int>(*(pSrc + i)), static_cast<int>(src_value));
       *(pDst + (2 * i)) = static_cast<DstType>(quant_map[src_value >> 4]);
       *(pDst + (2 * i + 1)) = static_cast<DstType>(quant_map[src_value & 0x0f]);
-      if(cute::thread0())
-      printf("num_elements = %d, i = %d, *(pSrc + i) = %d, *(pSrc + i) >> 4= %d, *(pSrc + i) & 0x0f, quant_map[*(pSrc + i) >> 4] = %f, quant_map[src_value & 0x0f] = %f \n", num_elements, i, static_cast<int>(*(pSrc + i)), static_cast<int>(*(pSrc + i) >> 4), static_cast<int>(*(pSrc + i) & 0x0f), static_cast<int>(quant_map[*(pSrc + i) >> 4]), static_cast<int>(quant_map[src_value & 0x0f]), static_cast<int>(*(pDst + (2 * i))), static_cast<int>(*(pDst + (2 * i + 1))));
+      //if(cute::thread0())
+      //printf("num_elements = %d, i = %d, *(pSrc + i) = %d, *(pSrc + i) >> 4= %d, *(pSrc + i) & 0x0f, quant_map[*(pSrc + i) >> 4] = %f, quant_map[src_value & 0x0f] = %f \n", num_elements, i, static_cast<int>(*(pSrc + i)), static_cast<int>(*(pSrc + i) >> 4), static_cast<int>(*(pSrc + i) & 0x0f), static_cast<int>(quant_map[*(pSrc + i) >> 4]), static_cast<int>(quant_map[src_value & 0x0f]), static_cast<int>(*(pDst + (2 * i))), static_cast<int>(*(pDst + (2 * i + 1))));
     }
 #else
     using SrcArray = cutlass::Array<SrcType, pack>;
@@ -299,11 +299,11 @@ public:
       //for(int j = 0; j < pack / 2; j++){
       for(int j = 0; j < pack; j++){
         //printf("(*pSrcArr)[%d] = %f\n", j, (*pSrcArr)[j]);
-        (*pDstArr)[2 * j] = static_cast<DstType>(quant_map[arr[j] >> 4]);
-        (*pDstArr)[2 * j + 1] = static_cast<DstType>(quant_map[arr[j] & 0x0f]);
+        (*pDstArr)[2 * j] = static_cast<DstType>(1);//quant_map[arr[j] >> 4]);
+        (*pDstArr)[2 * j + 1] = static_cast<DstType>(1);//quant_map[arr[j] & 0x0f]);
         //if(i==0)
         //if(cute::thread0()) printf("num_elements = %d, pack = %d, i = %d, j = %d, arr[j] = %d, arr[j] >> 4 = %d, (*pDstArr)[j] = %f, quant_map[arr[j] >> 4] = %f, quant_map[arr[j] & 0x0f] = %f\n",num_elements, pack,i, j, static_cast<int>(arr[j]), static_cast<int>(arr[j] >> 4), (*pDstArr)[2 * j], quant_map[arr[j] >> 4], quant_map[arr[j] & 0x0f]);
-        if(cute::thread0()) printf("i = %d, j = %d, pSrc + i * src_size = %d, pSrcArr = %d, arr[j] = %d, arr[j] >> 4 = %d\n",i, j, pSrc + i * src_size, pSrcArr, static_cast<int>(arr[j]), static_cast<int>(arr[j] >> 4));
+        //if(cute::thread0()) printf("i = %d, j = %d, pSrc + i * src_size = %d, pSrcArr = %d, arr[j] = %d, arr[j] >> 4 = %d\n",i, j, pSrc + i * src_size, pSrcArr, static_cast<int>(arr[j]), static_cast<int>(arr[j] >> 4));
         //(*pDstArr)[j+1] = static_cast<DstType>(quant_map[(*pSrcArr)[j] & 0x0F]);
       }
     }
@@ -315,7 +315,7 @@ public:
     for (int i = 0; i < 4; ++i) {
       CUTLASS_PRAGMA_UNROLL
       for (int j = 0; j < 32; ++j) {
-        if(cute::thread0()) printf("tCrA_mma(_, i, _)[j] = %f, i = %d, j = %d, tCrS_input(i) = %f\n",tCrA_mma(_, i, _)[j], i, j, tCrS_input(i));
+        //if(cute::thread0()) printf("tCrA_mma(_, i, _)[j] = %f, i = %d, j = %d, tCrS_input(i) = %f\n",tCrA_mma(_, i, _)[j], i, j, tCrS_input(i));
         tCrA_mma(_, i, _)[j] *= tCrS_input(i);
         //if(cute::thread0()) printf("after scaling tCrA_mma(_, i, _)[j] = %f\n", tCrA_mma(_, i, _)[j]);
       }
@@ -377,7 +377,7 @@ public:
 
 //// Get the block level coordinate(indexing) for current block
     auto blk_shape = TileShape{}; //256,256,32
-    //auto blk_shape_4bit = Shape<_256, _256, _16>{}; //TileShape{}; //256,256,32
+    auto blk_shape_4bit = Shape<_256, _256, _16>{}; //TileShape{}; //256,256,32
     int m_coord, n_coord, l_coord; //block index
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
       if(cute::thread0()) printf("AlongN !!\n");
@@ -404,7 +404,7 @@ public:
     // gA: 逻辑视图（无实际内存分配）
     Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
     Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,l_coord));	
-    //Tensor gB_4bit = local_tile(mB_nkl_4bit, select<1,2>(blk_shape_4bit), make_coord(n_coord,_,l_coord / 2));	
+    Tensor gB_4bit = local_tile(mB_nkl_4bit, select<1,2>(blk_shape_4bit), make_coord(n_coord,_,l_coord));	
   
 //// Allocate the tiled_mma and the accumulators for the (M,N) subgroup_tile_shape
     TiledMma tiled_mma;
@@ -451,7 +451,7 @@ public:
     // 虽然每个线程参与多个 Atom 的计算，但 tCgB 的 shape 是针对单个Atom 的线程分片
     Tensor tCgA = thr_mma.partition_A(gA);
     Tensor tCgB = thr_mma.partition_B(gB);
-    //Tensor tCgB_4bit = thr_mma.partition_B(gB_4bit);
+    Tensor tCgB_4bit = thr_mma.partition_B(gB_4bit);
 	
 //// Create fragments：将全局或共享内存中的数据分块转换为适合硬件加速器（如 Tensor Core）计算的寄存器格式
     // make_fragment_layout: 为寄存器片段（Fragment）创建内存布局（Layout），确保数据在寄存器中的排布符合硬件指令（如 Tensor Core）的要求
@@ -463,7 +463,7 @@ public:
     Tensor fragment_scale_input = make_tensor<NonVoidElementScale>(FragScaleLayout{}); // 创建scale 寄存器张量
 
     // narrow input fragment
-    Tensor mma_B_4bit = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b_4bit, tCgB(_,_,_,0).shape()));
+    Tensor mma_B_4bit = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b_4bit, tCgB_4bit(_,_,_,0).shape()));
     Tensor quant_frag = make_tensor<ElementQuant>(decltype(mma_B_4bit.layout()){});
 
     static_assert(std::is_same_v<typename decltype(quant_frag)::value_type, ElementQuant>);
@@ -526,7 +526,7 @@ public:
     //      partition_S: 生成逻辑视图（源布局），不实际移动数据
     //      partition_D: 实际复制数据到目标布局（如共享内存→寄存器）
     auto pAgA = thr_prefetch_A.partition_S(gA);
-    auto pBgB = thr_prefetch_B.partition_S(gB);
+    auto pBgB = thr_prefetch_B.partition_S(gB_4bit);
   
 ////
 //// Mainloop
@@ -597,7 +597,7 @@ public:
     const int k_reload_factor = params.group_size / BLK_K / 2;
     if(cute::thread0()) printf("k_reload_factor = %d\n", k_reload_factor); 
 
-    CUTLASS_PRAGMA_UNROLL
+    //CUTLASS_PRAGMA_UNROLL
     for (int k_tile = 0, k = k_start_idx; k_tile < k_tile_count; ++k_tile, ++k, ++prefetch_k) {
       // Copy gmem to rmem for the first k_tile
       copy(tiled_copy_a, tAgA(_,_,_,k), frag_copy_A);
@@ -611,10 +611,28 @@ public:
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
+auto pA = const_cast<ElementA*>(raw_pointer_cast(mma_A.data()));
+int num_A = decltype(size(mma_A))::value;
+for(int i=0; i<num_A; i++) {
+  printf("num_A = %d, i = %d, pA = %f\n",num_A, i, *(pA+i));
+}
+auto pB = const_cast<ElementA*>(raw_pointer_cast(mma_B.data()));
+int num_B = decltype(size(mma_B))::value;
+for(int i=0; i<num_B; i++) {
+  printf("num_B = %d, i = %d, pB = %f\n",num_B, i, *(pB+i));
+}
+auto pAcc = const_cast<float*>(raw_pointer_cast(accumulators.data()));
+int num_Acc = decltype(size(accumulators))::value;
+for(int i=0; i<accumulators.size(); i++) {
+  printf("num_Acc = %d, i = %d, pAcc = %f\n",num_Acc, i, *(pAcc+i));
+}
 
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
-    }
 
+for(int i=0; i<num_Acc; i++) {
+  printf("after gemm i = %d, pAcc = %f\n", i, *(pAcc+i));
+}
+    }
     SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>((char*)nullptr);
     CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
     //auto expanded_problem_size = ProblemShape{M, 2 * N, K, 1};
