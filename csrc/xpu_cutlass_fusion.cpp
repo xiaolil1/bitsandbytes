@@ -261,33 +261,44 @@ public:
     constexpr int num_elements = decltype(size(src))::value / 2;
 
   // TODO(Codeplay): (perf) consider replacing `pack` with `num_elements` here - See xe_flash_attn_mma.hpp
-    constexpr int pack = decltype(select_packing<SrcType, DstType, num_elements>::value())::value;
+    constexpr int pack = 1; //decltype(select_packing<SrcType, DstType, num_elements>::value())::value;
       int src_size = sizeof_bits_v<SrcType>;
       int dst_size = sizeof_bits_v<DstType>;
       if(cute::thread0()) printf("Cosize = %d, src_size = %d, dst_size = %d\n", num_elements, src_size, dst_size);
     //using Converter = cutlass::NumericArrayConverter<DstType, SrcType, pack, cutlass::FloatRoundStyle::round_to_nearest>;
+#if 1    
+    for(int i=0; i<num_elements; i++){
+      auto src_value = *(pSrc + i);
+      if(cute::thread0()) printf("*(pSrc + i) = %d, src_value = %d\n",static_cast<int>(*(pSrc + i)), static_cast<int>(src_value));
+      *(pDst + (2 * i)) = static_cast<DstType>(quant_map[src_value >> 4]);
+      *(pDst + (2 * i + 1)) = static_cast<DstType>(quant_map[src_value & 0x0f]);
+      if(cute::thread0()) printf("num_elements = %d, i = %d, *(pSrc + i) = %d, *(pSrc + i) >> 4= %d, *(pSrc + i) & 0x0f, quant_map[*(pSrc + i) >> 4] = %f, quant_map[src_value & 0x0f] = %f \n", num_elements, i, static_cast<int>(*(pSrc + i)), static_cast<int>(*(pSrc + i) >> 4), static_cast<int>(*(pSrc + i) & 0x0f), static_cast<int>(quant_map[*(pSrc + i) >> 4]), static_cast<int>(quant_map[src_value & 0x0f]), static_cast<int>(*(pDst + (2 * i))), static_cast<int>(*(pDst + (2 * i + 1))));
+    }
+#else
     using SrcArray = cutlass::Array<SrcType, pack>;
     using DstArray = cutlass::Array<DstType, pack>;
     constexpr int iters = num_elements / pack;
 
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < iters / 2 ; ++i) {
+    for (int i = 0; i < iters ; ++i) {
       SrcArray const* pSrcArr = reinterpret_cast<SrcArray const*>(pSrc) + i;
-      DstArray* pDstArr = reinterpret_cast<DstArray*>(pDst) + i * 2;
+      DstArray* pDstArr = reinterpret_cast<DstArray*>(pDst) + i;
       //*pDstArr = Converter::convert(*pSrcArr);
 	//LUT convert
       const SrcArray& arr = *pSrcArr;
       //#pragma unroll
+      //for(int j = 0; j < pack / 2; j++){
       for(int j = 0; j < pack; j++){
         //printf("(*pSrcArr)[%d] = %f\n", j, (*pSrcArr)[j]);
         (*pDstArr)[2 * j] = static_cast<DstType>(quant_map[arr[j] >> 4]);
         (*pDstArr)[2 * j + 1] = static_cast<DstType>(quant_map[arr[j] & 0x0f]);
         //if(i==0)
-        if(cute::thread0()) printf("num_elements = %d, pack = %d, i = %d, j = %d, arr[j] = %d, arr[j] >> 4 = %d, (*pDstArr)[j] = %f, quant_map[arr[j] >> 4] = %f, quant_map[arr[j] & 0x0f] = %f\n",num_elements, pack,i, j, static_cast<int>(arr[j]), static_cast<int>(arr[j] >> 4), (*pDstArr)[j], quant_map[arr[j] >> 4], quant_map[arr[j] & 0x0f]);
+        //if(cute::thread0()) printf("num_elements = %d, pack = %d, i = %d, j = %d, arr[j] = %d, arr[j] >> 4 = %d, (*pDstArr)[j] = %f, quant_map[arr[j] >> 4] = %f, quant_map[arr[j] & 0x0f] = %f\n",num_elements, pack,i, j, static_cast<int>(arr[j]), static_cast<int>(arr[j] >> 4), (*pDstArr)[2 * j], quant_map[arr[j] >> 4], quant_map[arr[j] & 0x0f]);
+        if(cute::thread0()) printf("i = %d, j = %d, pSrc + i * src_size = %d, pSrcArr = %d, arr[j] = %d, arr[j] >> 4 = %d\n",i, j, pSrc + i * src_size, pSrcArr, static_cast<int>(arr[j]), static_cast<int>(arr[j] >> 4));
         //(*pDstArr)[j+1] = static_cast<DstType>(quant_map[(*pSrcArr)[j] & 0x0F]);
       }
     }
-
+#endif
     // 16 x 4 x 2 values for B
     // 16 x 2 of these are same K
     // 4 different scale/zero values per thread, no exchange needed
