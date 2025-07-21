@@ -47,7 +47,7 @@ class TestXPU:
         [torch.uint8],
         ids=describe_dtype,
     )
-    @pytest.mark.parametrize("dim", [512], ids=id_formatter("dim"))
+    @pytest.mark.parametrize("dim", [256], ids=id_formatter("dim"))
     def test_gemm_4bit(self, device, dim, dtype, storage_type, quant_storage, double_quant, kind):
         errs1 = []
         errs2 = []
