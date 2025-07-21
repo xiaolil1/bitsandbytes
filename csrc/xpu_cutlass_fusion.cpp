@@ -423,8 +423,8 @@ public:
     // 对于单维度，坐标直接等于索引值。
     // 使用方式：int k = get<0>(coord);  // k = 0
     // cute::make_coord_iterator(A, B): 生成起始坐标A，步长B的迭代器
-    auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(K / 2)), make_shape(K / 2));
-    int k_tile_count = ceil_div(K / 2, get<2>(workgroup_shape));
+    auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(K)), make_shape(K));
+    int k_tile_count = ceil_div(K, get<2>(workgroup_shape));
     if(cute::thread0()) printf("k_tile_count = %d\n", k_tile_count);
          
 //////Run MainLoop//////
@@ -585,7 +585,7 @@ public:
 #endif  
 
     // crd2idx: 将多维逻辑坐标转换为线性索引
-    const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K / 2));
+    const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = 0;
 
     CUTLASS_PRAGMA_UNROLL
@@ -601,13 +601,13 @@ public:
     for (int k_tile = 0, k = k_start_idx; k_tile < k_tile_count; ++k_tile, ++k, ++prefetch_k) {
       // Copy gmem to rmem for the first k_tile
       copy(tiled_copy_a, tAgA(_,_,_,k), frag_copy_A);
-      copy(tiled_copy_b_4bit, tBgB(_,_,_,k), frag_copy_B);
+      copy(tiled_copy_b_4bit, tBgB(_,_,_,k/2), frag_copy_B);
 
       copy(tiled_copy_scale, copy_iter_s(_, _, _, k_start_idx + (k_tile / k_reload_factor)), copy_tCrS);
       //dequant(quant_frag, mma_B_expanded, fragment_scale_input, quant_map);
       dequant(quant_frag, mma_B, mma_A, fragment_scale_input, quant_map);
 
-      if(prefetch_k < k_tile_count) {
+      if(prefetch_k < k_tile_count/2) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
