@@ -126,13 +126,6 @@ using val_layout_load_A = decltype(make_layout(shape_div(typename traits_load_A:
 // val_layout_load_A：寄存器片段布局
 using Copy_A = decltype(make_tiled_copy(atom_load_A{}, Layout<CopyThreadShape>{}, val_layout_load_A{}));
 
-using GmemTiledCopyB_4bit = XE_2D_U8x32x32_LD_V;  // U8  (1-byte) block copy for 8bit-B (narrower type)
-using StrideB_4bit = cutlass::gemm::TagToStrideB_t<cutlass::layout::RowMajor>;
-using traits_load_B_4bit = Copy_Traits<GmemTiledCopyB_4bit, StrideB_4bit>;
-using atom_load_B_4bit = Copy_Atom<traits_load_B_4bit, ElementB>;
-using val_layout_load_B_4bit = decltype(make_layout(shape_div(typename traits_load_B_4bit::BlockShape{}, CopyThreadShape{})));
-using Copy_B_4bit = decltype(make_tiled_copy(atom_load_B_4bit{}, Layout<CopyThreadShape>{}, val_layout_load_B_4bit{}));
-
 using GmemTiledCopyB = XE_2D_U8x32x32_LD_V;  // U8  (1-byte) block copy for 8bit-B (narrower type)
 using StrideB = cutlass::gemm::TagToStrideB_t<cutlass::layout::RowMajor>;
 using traits_load_B = Copy_Traits<GmemTiledCopyB, StrideB>;
@@ -200,7 +193,7 @@ public:
 
 	  Copy_A tiled_copy_a;
     Copy_B tiled_copy_b;
-    Copy_B_4bit tiled_copy_b_4bit;
+    Copy_B tiled_copy_b_4bit;
 	  Copy_Scale tiled_copy_scale;
     int group_size;
 	
@@ -293,13 +286,13 @@ public:
     // 2 x 16 of these are same K
     // 4 different scale/zero values per thread, no exchange needed
     //CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < 4; ++i) {
-      //CUTLASS_PRAGMA_UNROLL
-      for (int j = 0; j < 32; ++j) {
-        tCrB_dst(_, i, _)[j] *= tCrS(i);
-        //printf("thread_idx = %d, i = %d, j = %d, scale_value = %f\n", thread_idx, i, j,  tCrS(i));
-      }
-    }
+//    for (int i = 0; i < 4; ++i) {
+//      //CUTLASS_PRAGMA_UNROLL
+//      for (int j = 0; j < 32; ++j) {
+//        tCrB_dst(_, i, _)[j] *= tCrS(i);
+//        //printf("thread_idx = %d, i = %d, j = %d, scale_value = %f\n", thread_idx, i, j,  tCrS(i));
+//      }
+//    }
 
 #if 0    
     for(int i=0; i<num_elements_dst; i++){
@@ -386,7 +379,7 @@ public:
   
     Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
     Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,l_coord));	
-    Tensor gB_4bit = local_tile(mB_nkl_4bit, select<1,2>(blk_shape /*blk_shape_4bit*/), make_coord(n_coord,_,l_coord));	
+    Tensor gB_4bit = local_tile(mB_nkl_4bit, select<1,2>(blk_shape_4bit), make_coord(n_coord,_,l_coord));	
   
 //// Allocate the tiled_mma and the accumulators for the (M,N) subgroup_tile_shape
     TiledMma tiled_mma;
@@ -496,8 +489,14 @@ public:
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
-      prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
-      prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
+      if(prefetch_k < k_tile_count) {
+        prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
+      }
+      if(prefetch_k < k_tile_count/2) {
+        prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
+      }
+      //prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
+      //prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
 
     const int k_reload_factor = params.group_size / BLK_K;
@@ -560,7 +559,7 @@ for(int i=0; i<num_Acc; i++) {
 
     SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>((char*)nullptr);
     CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
-    auto problem_shape_MNKL = problem_size; //append<4>(problem_size, 1);
+    auto problem_shape_MNKL = append<4>(problem_size, 1);
     epilogue(
       problem_shape_MNKL,
       subgroup_tile_shape,
@@ -613,7 +612,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
 
   StrideB stride_B_4bit = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n, k/2, l));
   auto mB_nkl_4bit = make_tensor(make_gmem_ptr(B), make_layout(make_shape(n, k/2, l), stride_B_4bit));
-  Copy_B_4bit tiled_copy_b_4bit{Copy_B_4bit{}.with(mB_nkl_4bit)};
+  Copy_B tiled_copy_b_4bit{Copy_B{}.with(mB_nkl_4bit)};
   
   params.tiled_copy_a = tiled_copy_a;
   params.tiled_copy_b = tiled_copy_b;
@@ -631,7 +630,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
 
   cutlass::KernelHardwareInfo hw_info;
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
-  auto problem_shape_MNKL = problem_size; //append<4>(problem_size, 1);
+  auto problem_shape_MNKL = append<4>(problem_size, 1);
   float alpha=1.0;
   float beta=0.f;
   StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(m, n, l));

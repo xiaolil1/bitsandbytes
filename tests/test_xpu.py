@@ -85,9 +85,9 @@ class TestXPU:
             quant_storage=quant_storage,
         )
         ##pdb.set_trace()
-        C3 = torch.matmul(A, B)
+        C3 = torch.matmul(A.t(), B)
         pdb.set_trace()
-        C2 = F.gemv_4bit(A, qB, state=state)
+        C2 = F.gemv_4bit(A, qB.t(), state=state)
         #pdb.set_trace()
         print(C3[0])
         print(C2[0])
