@@ -64,6 +64,7 @@ using ProblemShape = Shape<int, int, int, int>;
 // XE_8x16x16_F32BF16BF16F32_TT -> hardware 指令
 // Stride<_4, _1, _0> could be optional?
 using TileShape = Shape<_256, _256, _32>;
+//using TileShape = Shape<_32, _32, _32>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                   Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
@@ -246,74 +247,25 @@ public:
     Tensor<EngineRef, LayoutRef>& tCrA, //mma_A for debug
     float* quant_map
   ) {
-    int thread_idx = int(ThreadIdxX());
-
     static_assert(is_rmem<EngineIn>::value, "Input tensor for A conversion must come from registers");
     static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
     static_assert(size_v<LayoutOut> == cosize_v<LayoutOut>);
 
-    using SrcType = typename EngineIn::value_type;
-    using DstType = typename EngineOut::value_type;
-
-#if 0
-    auto const& src = tCrB_src(_, _, _);
-    auto const& dst = tCrB_dst(_, _, _);
-    auto const& A_ref = tCrA(_, _, _);
-    auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
-    auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
-    auto pA = const_cast<DstType*>(raw_pointer_cast(A_ref.data()));
-    constexpr int num_elements = decltype(size(src))::value;
-    constexpr int num_elements_dst = decltype(size(dst))::value;
-    constexpr int num_elements_A = decltype(size(A_ref))::value;
-
-    if(cute::thread0()) printf("dequant src num_elements = %d, num_elements_dst = %d, num_elements_A = %d\n", num_elements, num_elements_dst, num_elements_A);
-#if 0
-    for(int i=0; i<num_elements_A; i++){
-      printf("thread_idx = %d, num_elements_A = %d, i = %d, A_value = %f\n", thread_idx, num_elements_A, i, *(pA+i));
-    }
-#endif
-
-    for(int i=0; i<num_elements; i++){
-      auto src_value = *(pSrc + i);
-      *(pDst + (2 * i)) = static_cast<DstType>(quant_map[src_value >> 4 & 0x0f]);
-      *(pDst + (2 * i + 1)) = static_cast<DstType>(quant_map[src_value & 0x0f]);
-#if 0      
-      printf("thread_idx = %d, num_elements = %d, i = %d, src_value = %d, src_value >> 4 = %d, src_value & 0x0f = %d, quant_map[src_value >> 4] = %f, quant_map[src_value & 0x0f] = %f, dst_value_%d = %f, dst_value_%d = %f\n", thread_idx, num_elements, i, static_cast<int>(src_value), static_cast<int>(src_value >> 4), static_cast<int>(src_value & 0x0f), quant_map[src_value >> 4], quant_map[src_value & 0x0f], 2*i, *(pDst + (2 * i)), 2 * i + 1, *(pDst + (2 * i + 1)));
-#endif      
-    }
-
-    // 4 x 2 x 16 values for B
-    // 2 x 16 of these are same K
-    // 4 different scale/zero values per thread, no exchange needed
-    //CUTLASS_PRAGMA_UNROLL
-//    for (int i = 0; i < 4; ++i) {
-//      //CUTLASS_PRAGMA_UNROLL
-//      for (int j = 0; j < 32; ++j) {
-//        tCrB_dst(_, i, _)[j] *= tCrS(i);
-//        //printf("thread_idx = %d, i = %d, j = %d, scale_value = %f\n", thread_idx, i, j,  tCrS(i));
-//      }
-//    }
-
-#if 0    
-    for(int i=0; i<num_elements_dst; i++){
-      printf("thread_idx = %d, num_elements_dst = %d, i = %d, after scaling, dst_value_%d = %f, dst_value_%d = %f\n", thread_idx, num_elements_dst, i, 2*i, *(pDst + (2 * i)), 2 * i + 1, *(pDst + (2 * i + 1)));
-    }
-#endif
-
-#else
-  for (int i = 0; i < size(tCrB_src); ++i) {
+    for (int i = 0; i < size(tCrB_src); ++i) {
+//      uint8_t src_value = tCrB_src(i);
+//      tCrB_dst(2*i) = static_cast<ElementMMA>(quant_map[(src_value >> 4) & 0x0F]);// * tCrS(i/4) ;
+//      tCrB_dst(2*i+1) = static_cast<ElementMMA>(quant_map[src_value & 0x0F]);// * tCrS(i/4);
     uint8_t packed = tCrB_src(i);
     uint8_t high = (packed >> 4) & 0x0F;
     uint8_t low = packed & 0x0F;
 
     // 应用缩放因子
-    float val_high = quant_map[high];// * tCrS(i/32); // 假设每32个元素共享一个scale
-    float val_low = quant_map[low];// * tCrS(i/32);
+    float val_high = quant_map[high];// * tCrS(i/4); // 假设每32个元素共享一个scale
+    float val_low = quant_map[low];// * tCrS(i/4);
 
     tCrB_dst(2*i) = static_cast<ElementMMA>(val_high);
     tCrB_dst(2*i+1) = static_cast<ElementMMA>(val_low);
-  }
-#endif
+    }
   }
   
   CUTLASS_DEVICE
