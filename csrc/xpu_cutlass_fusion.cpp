@@ -262,16 +262,16 @@ public:
     auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
     auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
     //auto pA = const_cast<DstType*>(raw_pointer_cast(A_ref.data()));
-    constexpr int num_elements = decltype(size(src))::value / 2;
-    for(int i=0; i<num_elements * 2; i++){
+    constexpr int num_elements = decltype(size(src))::value;
+    //for(int i=0; i<num_elements * 2; i++){
       //if(cute::thread0())
       //printf("ThreadIdxX() = %d, i = %d, *(pSrc + i) = %d, *(pA + i*2) = %f, *(pA + i*2+1) = %f\n", ThreadIdxX(), i, static_cast<int>(*(pSrc + i)), static_cast<int>(*(pA + i*2)), static_cast<int>(*(pA + i*2+1)));
-    }
+    //}
 
   // TODO(Codeplay): (perf) consider replacing `pack` with `num_elements` here - See xe_flash_attn_mma.hpp
-    constexpr int pack = 1; //decltype(select_packing<SrcType, DstType, num_elements>::value())::value;
-      int src_size = sizeof_bits_v<SrcType>;
-      int dst_size = sizeof_bits_v<DstType>;
+    //constexpr int pack = 1; //decltype(select_packing<SrcType, DstType, num_elements>::value())::value;
+      //int src_size = sizeof_bits_v<SrcType>;
+      //int dst_size = sizeof_bits_v<DstType>;
       //if(cute::thread0()) printf("Cosize = %d, src_size = %d, dst_size = %d\n", num_elements, src_size, dst_size);
     //using Converter = cutlass::NumericArrayConverter<DstType, SrcType, pack, cutlass::FloatRoundStyle::round_to_nearest>;
 #if 1    
@@ -607,8 +607,10 @@ public:
       //dequant(quant_frag, mma_B_expanded, fragment_scale_input, quant_map);
       dequant(quant_frag, mma_B, mma_A, fragment_scale_input, quant_map);
 
-      if(prefetch_k < k_tile_count/2) {
+      if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
+      }
+      if(prefetch_k < k_tile_count/2) {
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
 auto pA = const_cast<ElementA*>(raw_pointer_cast(mma_A.data()));
