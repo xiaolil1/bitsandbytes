@@ -255,7 +255,7 @@ public:
     using SrcType = typename EngineIn::value_type;
     using DstType = typename EngineOut::value_type;
 
-#if 1
+#if 0
     auto const& src = tCrB_src(_, _, _);
     auto const& dst = tCrB_dst(_, _, _);
     auto const& A_ref = tCrA(_, _, _);
@@ -275,7 +275,7 @@ public:
 
     for(int i=0; i<num_elements; i++){
       auto src_value = *(pSrc + i);
-      *(pDst + (2 * i)) = static_cast<DstType>(quant_map[src_value >> 4]);
+      *(pDst + (2 * i)) = static_cast<DstType>(quant_map[src_value >> 4 & 0x0f]);
       *(pDst + (2 * i + 1)) = static_cast<DstType>(quant_map[src_value & 0x0f]);
 #if 0      
       printf("thread_idx = %d, num_elements = %d, i = %d, src_value = %d, src_value >> 4 = %d, src_value & 0x0f = %d, quant_map[src_value >> 4] = %f, quant_map[src_value & 0x0f] = %f, dst_value_%d = %f, dst_value_%d = %f\n", thread_idx, num_elements, i, static_cast<int>(src_value), static_cast<int>(src_value >> 4), static_cast<int>(src_value & 0x0f), quant_map[src_value >> 4], quant_map[src_value & 0x0f], 2*i, *(pDst + (2 * i)), 2 * i + 1, *(pDst + (2 * i + 1)));
@@ -301,17 +301,18 @@ public:
 #endif
 
 #else
-    for (int i = 0; i < 4; ++i) {
-      //CUTLASS_PRAGMA_UNROLL
-      for (int j = 0; j < 32 / 2; ++j) {
-        //printf("thread_idx = %d, i = %d, j = %d, scale_value = %f, dst_value before scaled = %f\n",thread_idx, i, j,  tCrS(i), tCrB_dst(_, i, _)[j]);
-        tCrB_dst(_, i, _)[2 * j] = static_cast<DstType>(quant_map[tCrB_src(_, i, _)[j] >> 4]);
-        tCrB_dst(_, i, _)[2 * j + 1] = static_cast<DstType>(quant_map[tCrB_src(_, i, _)[j] & 0x0f]);
-        tCrB_dst(_, i, _)[2 * j] *= tCrS(i);
-        tCrB_dst(_, i, _)[2 * j + 1] *= tCrS(i);
-        //printf("thread_idx = %d, i = %d, j = %d, dst_value after scaled = %f\n",thread_idx, i, j, tCrB_dst(_, i, _)[j]);
-      }
-    }
+  for (int i = 0; i < size(tCrB_src); ++i) {
+    uint8_t packed = tCrB_src(i);
+    uint8_t high = (packed >> 4) & 0x0F;
+    uint8_t low = packed & 0x0F;
+
+    // 应用缩放因子
+    float val_high = quant_map[high];// * tCrS(i/32); // 假设每32个元素共享一个scale
+    float val_low = quant_map[low];// * tCrS(i/32);
+
+    tCrB_dst(2*i) = static_cast<ElementMMA>(val_high);
+    tCrB_dst(2*i+1) = static_cast<ElementMMA>(val_low);
+  }
 #endif
   }
   
