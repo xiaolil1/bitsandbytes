@@ -46,7 +46,7 @@ using ElementB = QuantType; //cutlass::gemm::collective::detail::deduce_mixed_wi
 
 using ElementMMA = ElementA;
 using ElementQuant = QuantType;
-using NonVoidElementScale = MmaType;
+using ElementScale = MmaType;
 
 using ElementC = float;
 using ElementD = float;
@@ -126,6 +126,13 @@ using val_layout_load_A = decltype(make_layout(shape_div(typename traits_load_A:
 // val_layout_load_A：寄存器片段布局
 using Copy_A = decltype(make_tiled_copy(atom_load_A{}, Layout<CopyThreadShape>{}, val_layout_load_A{}));
 
+using GmemTiledCopyB_4bit = XE_2D_U8x32x32_LD_V;  // U8  (1-byte) block copy for 8bit-B (narrower type)
+using StrideB_4bit = cutlass::gemm::TagToStrideB_t<cutlass::layout::RowMajor>;
+using traits_load_B_4bit = Copy_Traits<GmemTiledCopyB_4bit, StrideB_4bit>;
+using atom_load_B_4bit = Copy_Atom<traits_load_B_4bit, ElementB>;
+using val_layout_load_B_4bit = decltype(make_layout(shape_div(typename traits_load_B_4bit::BlockShape{}, CopyThreadShape{})));
+using Copy_B_4bit = decltype(make_tiled_copy(atom_load_B_4bit{}, Layout<CopyThreadShape>{}, val_layout_load_B_4bit{}));
+
 using GmemTiledCopyB = XE_2D_U8x32x32_LD_V;  // U8  (1-byte) block copy for 8bit-B (narrower type)
 using StrideB = cutlass::gemm::TagToStrideB_t<cutlass::layout::RowMajor>;
 using traits_load_B = Copy_Traits<GmemTiledCopyB, StrideB>;
@@ -137,7 +144,7 @@ using GmemTiledCopyScale = XE_2D_U16x1x32_LD_N;
 using StrideScale = cute::Stride<_1, int64_t, int64_t>; //dynamic stride
 using CopyThreadShapeRev = decltype(cute::reverse(CopyThreadShape{}));
 using traits_load_scale = Copy_Traits<GmemTiledCopyScale, StrideScale>;
-using atom_load_scale = Copy_Atom<traits_load_scale, NonVoidElementScale>;
+using atom_load_scale = Copy_Atom<traits_load_scale, ElementScale>;
 using val_layout_load_scale = decltype(make_layout(shape_div(typename traits_load_scale::BlockShape{}, CopyThreadShapeRev{}))); 
 using Copy_Scale = decltype(make_tiled_copy(atom_load_scale{}, Layout<CopyThreadShapeRev>{}, val_layout_load_scale{}));
 
@@ -193,7 +200,7 @@ public:
 
 	  Copy_A tiled_copy_a;
     Copy_B tiled_copy_b;
-    Copy_B tiled_copy_b_4bit;
+    Copy_B_4bit tiled_copy_b_4bit;
 	  Copy_Scale tiled_copy_scale;
     int group_size;
 	
@@ -240,12 +247,13 @@ public:
             class... Ts>
   CUTLASS_DEVICE
   void dequant(
-    Tensor<EngineIn, LayoutIn> const& tCrA_load, 
-    Tensor<EngineOut, LayoutOut>& tCrA_mma,
-    Tensor<EngineRef, LayoutRef>& A_ref, //mma_A for debug
-    Tensor<EngineScales, LayoutScales>& tCrS_input,
+    Tensor<EngineIn, LayoutIn> const& tCrB_src, 
+    Tensor<EngineOut, LayoutOut>& tCrB_dst,
+    Tensor<EngineScales, LayoutScales>& tCrS,
+    Tensor<EngineRef, LayoutRef>& tCrA, //mma_A for debug
     float* quant_map
   ) {
+    int thread_idx = int(ThreadIdxX());
 
     static_assert(is_rmem<EngineIn>::value, "Input tensor for A conversion must come from registers");
     static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
@@ -255,89 +263,63 @@ public:
     using DstType = typename EngineOut::value_type;
 
 #if 1
-    auto const& src = tCrA_load(_, _, _);
-    //auto src = src_(_, cute::take(src_.size(1)/2), _);
-    //auto src = src_(_, _0{size_t(src_.size(1)/2)}, _);
-    auto const& dst = tCrA_mma(_, _, _);
+    auto const& src = tCrB_src(_, _, _);
+    auto const& dst = tCrB_dst(_, _, _);
+    auto const& A_ref = tCrA(_, _, _);
     auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
     auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
-    //auto pA = const_cast<DstType*>(raw_pointer_cast(A_ref.data()));
+    auto pA = const_cast<DstType*>(raw_pointer_cast(A_ref.data()));
     constexpr int num_elements = decltype(size(src))::value;
-    //for(int i=0; i<num_elements * 2; i++){
-      //if(cute::thread0())
-      //printf("ThreadIdxX() = %d, i = %d, *(pSrc + i) = %d, *(pA + i*2) = %f, *(pA + i*2+1) = %f\n", ThreadIdxX(), i, static_cast<int>(*(pSrc + i)), static_cast<int>(*(pA + i*2)), static_cast<int>(*(pA + i*2+1)));
-    //}
+    constexpr int num_elements_dst = decltype(size(dst))::value;
+    constexpr int num_elements_A = decltype(size(A_ref))::value;
 
-  // TODO(Codeplay): (perf) consider replacing `pack` with `num_elements` here - See xe_flash_attn_mma.hpp
-    //constexpr int pack = 1; //decltype(select_packing<SrcType, DstType, num_elements>::value())::value;
-      //int src_size = sizeof_bits_v<SrcType>;
-      //int dst_size = sizeof_bits_v<DstType>;
-      //if(cute::thread0()) printf("Cosize = %d, src_size = %d, dst_size = %d\n", num_elements, src_size, dst_size);
-    //using Converter = cutlass::NumericArrayConverter<DstType, SrcType, pack, cutlass::FloatRoundStyle::round_to_nearest>;
-#if 1    
+    if(cute::thread0()) printf("dequant src num_elements = %d, num_elements_dst = %d, num_elements_A = %d\n", num_elements, num_elements_dst, num_elements_A);
+#if 0
+    for(int i=0; i<num_elements_A; i++){
+      printf("thread_idx = %d, num_elements_A = %d, i = %d, A_value = %f\n", thread_idx, num_elements_A, i, *(pA+i));
+    }
+#endif
+
     for(int i=0; i<num_elements; i++){
       auto src_value = *(pSrc + i);
-      //if(cute::thread0()) printf("*(pSrc + i) = %d, src_value = %d\n",static_cast<int>(*(pSrc + i)), static_cast<int>(src_value));
       *(pDst + (2 * i)) = static_cast<DstType>(quant_map[src_value >> 4]);
       *(pDst + (2 * i + 1)) = static_cast<DstType>(quant_map[src_value & 0x0f]);
-      //if(cute::thread0())
-      //printf("num_elements = %d, i = %d, *(pSrc + i) = %d, *(pSrc + i) >> 4= %d, *(pSrc + i) & 0x0f, quant_map[*(pSrc + i) >> 4] = %f, quant_map[src_value & 0x0f] = %f \n", num_elements, i, static_cast<int>(*(pSrc + i)), static_cast<int>(*(pSrc + i) >> 4), static_cast<int>(*(pSrc + i) & 0x0f), static_cast<int>(quant_map[*(pSrc + i) >> 4]), static_cast<int>(quant_map[src_value & 0x0f]), static_cast<int>(*(pDst + (2 * i))), static_cast<int>(*(pDst + (2 * i + 1))));
+#if 0      
+      printf("thread_idx = %d, num_elements = %d, i = %d, src_value = %d, src_value >> 4 = %d, src_value & 0x0f = %d, quant_map[src_value >> 4] = %f, quant_map[src_value & 0x0f] = %f, dst_value_%d = %f, dst_value_%d = %f\n", thread_idx, num_elements, i, static_cast<int>(src_value), static_cast<int>(src_value >> 4), static_cast<int>(src_value & 0x0f), quant_map[src_value >> 4], quant_map[src_value & 0x0f], 2*i, *(pDst + (2 * i)), 2 * i + 1, *(pDst + (2 * i + 1)));
+#endif      
     }
-#else
-    using SrcArray = cutlass::Array<SrcType, pack>;
-    using DstArray = cutlass::Array<DstType, pack>;
-    constexpr int iters = num_elements / pack;
 
-    CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < iters ; ++i) {
-      SrcArray const* pSrcArr = reinterpret_cast<SrcArray const*>(pSrc) + i;
-      DstArray* pDstArr = reinterpret_cast<DstArray*>(pDst) + i;
-      //*pDstArr = Converter::convert(*pSrcArr);
-	//LUT convert
-      const SrcArray& arr = *pSrcArr;
-      //#pragma unroll
-      //for(int j = 0; j < pack / 2; j++){
-      for(int j = 0; j < pack; j++){
-        //printf("(*pSrcArr)[%d] = %f\n", j, (*pSrcArr)[j]);
-        (*pDstArr)[2 * j] = static_cast<DstType>(1);//quant_map[arr[j] >> 4]);
-        (*pDstArr)[2 * j + 1] = static_cast<DstType>(1);//quant_map[arr[j] & 0x0f]);
-        //if(i==0)
-        //if(cute::thread0()) printf("num_elements = %d, pack = %d, i = %d, j = %d, arr[j] = %d, arr[j] >> 4 = %d, (*pDstArr)[j] = %f, quant_map[arr[j] >> 4] = %f, quant_map[arr[j] & 0x0f] = %f\n",num_elements, pack,i, j, static_cast<int>(arr[j]), static_cast<int>(arr[j] >> 4), (*pDstArr)[2 * j], quant_map[arr[j] >> 4], quant_map[arr[j] & 0x0f]);
-        //if(cute::thread0()) printf("i = %d, j = %d, pSrc + i * src_size = %d, pSrcArr = %d, arr[j] = %d, arr[j] >> 4 = %d\n",i, j, pSrc + i * src_size, pSrcArr, static_cast<int>(arr[j]), static_cast<int>(arr[j] >> 4));
-        //(*pDstArr)[j+1] = static_cast<DstType>(quant_map[(*pSrcArr)[j] & 0x0F]);
+    // 4 x 2 x 16 values for B
+    // 2 x 16 of these are same K
+    // 4 different scale/zero values per thread, no exchange needed
+    //CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < 4; ++i) {
+      //CUTLASS_PRAGMA_UNROLL
+      for (int j = 0; j < 32; ++j) {
+        tCrB_dst(_, i, _)[j] *= tCrS(i);
+        //printf("thread_idx = %d, i = %d, j = %d, scale_value = %f\n", thread_idx, i, j,  tCrS(i));
+      }
+    }
+
+#if 0    
+    for(int i=0; i<num_elements_dst; i++){
+      printf("thread_idx = %d, num_elements_dst = %d, i = %d, after scaling, dst_value_%d = %f, dst_value_%d = %f\n", thread_idx, num_elements_dst, i, 2*i, *(pDst + (2 * i)), 2 * i + 1, *(pDst + (2 * i + 1)));
+    }
+#endif
+
+#else
+    for (int i = 0; i < 4; ++i) {
+      //CUTLASS_PRAGMA_UNROLL
+      for (int j = 0; j < 32 / 2; ++j) {
+        //printf("thread_idx = %d, i = %d, j = %d, scale_value = %f, dst_value before scaled = %f\n",thread_idx, i, j,  tCrS(i), tCrB_dst(_, i, _)[j]);
+        tCrB_dst(_, i, _)[2 * j] = static_cast<DstType>(quant_map[tCrB_src(_, i, _)[j] >> 4]);
+        tCrB_dst(_, i, _)[2 * j + 1] = static_cast<DstType>(quant_map[tCrB_src(_, i, _)[j] & 0x0f]);
+        tCrB_dst(_, i, _)[2 * j] *= tCrS(i);
+        tCrB_dst(_, i, _)[2 * j + 1] *= tCrS(i);
+        //printf("thread_idx = %d, i = %d, j = %d, dst_value after scaled = %f\n",thread_idx, i, j, tCrB_dst(_, i, _)[j]);
       }
     }
 #endif
-    // 16 x 4 x 2 values for B
-    // 16 x 2 of these are same K
-    // 4 different scale/zero values per thread, no exchange needed
-    CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < 4; ++i) {
-      CUTLASS_PRAGMA_UNROLL
-      for (int j = 0; j < 32; ++j) {
-        //if(cute::thread0()) printf("tCrA_mma(_, i, _)[j] = %f, i = %d, j = %d, tCrS_input(i) = %f\n",tCrA_mma(_, i, _)[j], i, j, tCrS_input(i));
-        tCrA_mma(_, i, _)[j] *= tCrS_input(i);
-        //if(cute::thread0()) printf("after scaling tCrA_mma(_, i, _)[j] = %f\n", tCrA_mma(_, i, _)[j]);
-      }
-    }
-#else
-    auto const& src = tCrA_load(_, _, _);
-    //auto const& dst = tCrA_mma(_, _, _);
-    auto pSrc = const_cast<SrcType*>(raw_pointer_cast(src.data()));
-    //auto pSrc = const_cast<SrcType*>(src.data());
-    //auto pSrc = reinterpret_cast<const uint8_t*>(raw_pointer_cast(src.data()));
-    //auto pDst = const_cast<DstType*>(raw_pointer_cast(dst.data()));
-    constexpr int num_elements = decltype(size(src))::value;
-    //CUTLASS_PRAGMA_UNROLL
-    for(int i = 0; i < num_elements; i++){
-       //tCrA_mma(_, _, _)[i] = static_cast<DstType>(1.f);//quant_map[*(pSrc + i) >> 4]) * tCrS_input(i);
-       uint8_t offset = i * sizeof_bits_v<SrcType>;
-       tCrA_mma(_, _, _)[i * 2] = static_cast<DstType>(quant_map[*(pSrc + offset) >> 4] * tCrS_input(0));
-       tCrA_mma(_, _, _)[i * 2 + 1] = static_cast<DstType>(quant_map[*(pSrc + offset) & 0x0F]) * tCrS_input(0);
-       //if(cute::thread0())
-       printf("num_elements = %d, *(pSrc + offset) = %d, *(pSrc + offset) >> 4 = %d, quant_map[*(pSrc + offset) >> 4] = %f, tCrS_input(i) = %f, tCrA_mma(_, _, _)[i] = %f\n", num_elements, static_cast<int>(*(pSrc + offset)), static_cast<int>(*(pSrc + offset) >> 4), quant_map[*(pSrc + offset) >> 4], tCrS_input(0), tCrA_mma(_, _, _)[i]);
-    }
-#endif    
   }
   
   CUTLASS_DEVICE
@@ -347,16 +329,18 @@ public:
     int M = params.m;
     int N = params.n;
     int K = params.k;
+    int L = 1;
+
     T* A = params.A;
     uint8_t* B = params.B;
     float* out = params.out;
     float* datatype = params.datatype;
+
     auto tiled_copy_a = params.tiled_copy_a;
     auto tiled_copy_b = params.tiled_copy_b;
     auto tiled_copy_b_4bit = params.tiled_copy_b_4bit;
 	  auto tiled_copy_scale = params.tiled_copy_scale;
 
-    int L = 1;
     auto problem_size = ProblemShape{M, N, K, L};
 
     // Preconditions
@@ -364,9 +348,9 @@ public:
     static_assert(cute::rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
-  	
-    int thread_idx = int(ThreadIdxX());
 
+//// Get TID
+    int thread_idx = int(ThreadIdxX());
 //// Load Dequatize LUT and save to SLM, 16 for 4bits
     float* quant_map = reinterpret_cast<float*>(smem_buf);
     if (thread_idx < 16) {
@@ -377,7 +361,7 @@ public:
 
 //// Get the block level coordinate(indexing) for current block
     auto blk_shape = TileShape{}; //256,256,32
-    auto blk_shape_4bit = Shape<_256, _256, _16>{}; //TileShape{}; //256,256,32
+    auto blk_shape_4bit = Shape<_256, _256, _16>{};
     int m_coord, n_coord, l_coord; //block index
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
       if(cute::thread0()) printf("AlongN !!\n");
@@ -400,156 +384,78 @@ public:
     Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L)); //coordinate tensor: 0,1,2....
     Tensor mB_nkl_4bit = cute::get_pvc_tensor(make_shape(N,K/2,L)); //coordinate tensor: 0,1,2....
   
-    // local_tile: 从全局张量中提取线程块（CTA）级别的局部子块
-    // gA: 逻辑视图（无实际内存分配）
     Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
     Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,l_coord));	
-    Tensor gB_4bit = local_tile(mB_nkl_4bit, select<1,2>(blk_shape_4bit), make_coord(n_coord,_,l_coord));	
+    Tensor gB_4bit = local_tile(mB_nkl_4bit, select<1,2>(blk_shape /*blk_shape_4bit*/), make_coord(n_coord,_,l_coord));	
   
 //// Allocate the tiled_mma and the accumulators for the (M,N) subgroup_tile_shape
     TiledMma tiled_mma;
-    // partition_fragment_C： 将累加器 C 划分为线程私有的寄存器片段
-    // tiled_mma：分块策略（含线程布局）[ThreadsM, ThreadsK]。
-    // tile_shape：子块形状 [TileM, TileK]。
-    // 输出 FragmentC，每个线程处理 (TileM/ThreadsM, TileK/ThreadsK) 的子区域。
-    // 分块需与线程布局兼容。
-    // 寄存器片段大小需适配硬件限制。
     Tensor accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape)); 
     clear(accumulators);
 
 //// Create K slicing tiling iterator and count
-    // make_shape(128)：创建一个单维度形状 [128]，等价于数学上的线性数组。
-    // idx2crd(0, shape)：将线性索引 0 映射到该形状的逻辑坐标。
-    // 对于单维度，坐标直接等于索引值。
-    // 使用方式：int k = get<0>(coord);  // k = 0
-    // cute::make_coord_iterator(A, B): 生成起始坐标A，步长B的迭代器
     auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(K)), make_shape(K));
-    int k_tile_count = ceil_div(K, get<2>(workgroup_shape));
+    int k_tile_count = ceil_div(K, get<2>(workgroup_shape)); //inner_loop number
     if(cute::thread0()) printf("k_tile_count = %d\n", k_tile_count);
-         
-//////Run MainLoop//////
-    // thread_idx: linear index (threadIdx.x + blockDim.x * threadIdx.y)
-    // thr_copy_A : 当前线程负责的数据子块
-    auto thr_copy_A = tiled_copy_a.get_slice(thread_idx); //A 的拷贝分片
-    auto thr_copy_B = tiled_copy_b.get_slice(thread_idx);
+
+
+////// MainLoop //////
+    auto thr_copy_A = tiled_copy_a.get_slice(thread_idx);
+    //auto thr_copy_B = tiled_copy_b.get_slice(thread_idx);
     auto thr_copy_B_4bit = tiled_copy_b_4bit.get_slice(thread_idx);
 	  auto thr_copy_scale = tiled_copy_scale.get_slice(thread_idx);
   
     auto sg = syclcompat::get_nd_item<1>().get_sub_group();
     auto first_thread_in_sg_idx = sg.get_group_linear_id() * DispatchPolicy::SubgroupSize;
-    auto thr_mma = tiled_mma.get_slice(first_thread_in_sg_idx); //MMA 线程分片
+    auto thr_mma = tiled_mma.get_slice(first_thread_in_sg_idx); 
   
-    // 获取全局数据的线程分片，Partition global counting tensors for MMA
-    // partition_A 是一个将矩阵 A 的逻辑分块（Tile）划分为线程私有的数据片段（Fragment) 的操作，主要用于矩阵乘法（GEMM）核心里线程级的数据分配
-    // 将全局矩阵 A 的逻辑分块（gA）划分为当前线程（thr_mma）需要处理的寄存器片段
-    // thr_mma：线程的 MMA（矩阵乘累加）分片
-    // gA：矩阵 A 的全局或共享内存分块
-    // tCgA，一个逻辑张量，表示当前线程负责的寄存器片段, 形状由 TiledMMA 策略决定
-    // tCgA: t(tensor) C(compute) gA(globaleA); 
-    // tCsA: s (shared memory)
-    // tCrA: r (register)
-    // 虽然每个线程参与多个 Atom 的计算，但 tCgB 的 shape 是针对单个Atom 的线程分片
+//// Create fragments：将全局或共享内存中的数据分块转换为适合硬件加速器（如 Tensor Core）计算的寄存器格式
+    // 提取分块形状（tCgA） → 生成寄存器布局（make_fragment_layout） → 创建逻辑张量（make_tensor）
     Tensor tCgA = thr_mma.partition_A(gA);
     Tensor tCgB = thr_mma.partition_B(gB);
     Tensor tCgB_4bit = thr_mma.partition_B(gB_4bit);
 	
-//// Create fragments：将全局或共享内存中的数据分块转换为适合硬件加速器（如 Tensor Core）计算的寄存器格式
-    // make_fragment_layout: 为寄存器片段（Fragment）创建内存布局（Layout），确保数据在寄存器中的排布符合硬件指令（如 Tensor Core）的要求
-    // 提取分块形状（tCgA） → 生成寄存器布局（make_fragment_layout） → 创建逻辑张量（make_tensor）
     Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_a, tCgA(_,_,_,0).shape()));
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b, tCgB(_,_,_,0).shape()));
+    Tensor mma_B_4bit = make_tensor<ElementQuant>(make_fragment_layout(tiled_copy_b_4bit, tCgB_4bit(_,_,_,0).shape()));
 
-    using FragScaleLayout = Layout<Shape<_2, _2, _1>>; // scale 寄存器分布
-    Tensor fragment_scale_input = make_tensor<NonVoidElementScale>(FragScaleLayout{}); // 创建scale 寄存器张量
+    Tensor mma_Scale = make_tensor<ElementScale>(Layout<Shape<_2, _2, _1>>{});
 
-    // narrow input fragment
-    Tensor mma_B_4bit = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b_4bit, tCgB_4bit(_,_,_,0).shape()));
-    Tensor quant_frag = make_tensor<ElementQuant>(decltype(mma_B_4bit.layout()){});
-
-    static_assert(std::is_same_v<typename decltype(quant_frag)::value_type, ElementQuant>);
+    static_assert(std::is_same_v<typename decltype(mma_B_4bit)::value_type, ElementQuant>);
     static_assert(std::is_same_v<typename decltype(mma_A)::value_type, ElementMMA>);
     static_assert(std::is_same_v<typename decltype(mma_B)::value_type, ElementMMA>);
 
 //// Retile for copy
-    // retile_D: 将数据从一种布局（如共享内存）转换为另一种布局（如寄存器片段），确保数据在寄存器中的排列符合硬件指令（如 Tensor Core）的要求
-    // 为什么需要 retile_D？共享内存的布局（如行主序 Stride<_1,_128>）可能与硬件指令（如 Tensor Core 的 8x8 分块）不兼容, 通过 retile_D 将数据重排为寄存器需要的布局（如 Stride<_1,_8>）
-    // D（Destination）：数据最终需要适配的布局（通常是寄存器布局）
-    // thr_copy_A.retile_D(mma_A): 将线程分片的数据（thr_copy_A）从原始布局（共享内存的行主序）重映射为目标布局（mma_A 的寄存器布局）。
-    // frag_copy_A: 数据按 mma_A 的布局重新排列后的寄存器片段
-    // code Analyze:
-    //   (1) Lambda 表达式 [&](){ ... }()
-    //     [&]：捕获当前作用域的所有变量（按引用）。
-    //     std::make_pair：返回 frag_copy_A 和 frag_copy_B 的元组。
-    //     立即执行：() 表示直接调用该 Lambda。
-    //   (2) thr_copy_A.retile_D(mma_A)
-    //     作用：将 thr_copy_A 的数据按 mma_A 的布局重排到寄存器。
-    //     底层操作：
-    //       从共享内存读取数据。
-    //       按 mma_A.layout() 的步长（如 Stride<_1,_8>）重新排列。
-    //       写入寄存器片段 frag_copy_A。
-    //   (3) thr_copy_B_4bit.retile_D(quant_frag)
-    //     作用：将 4-bit 量化的 thr_copy_B_4bit 数据解压并按 quant_frag 布局重排。
-    //     特殊处理：
-    //       4-bit 解压：将每字节的 2 个 4-bit 数值解压为 2 个 8-bit 数值。
-    //       布局适配：确保解压后的数据符合 MMA 指令的输入要求（如 int8 或 fp16）。   
-    //   (4) 为什么需要 make_pair?: C++ 函数（或 Lambda）只能返回一个值，无法直接返回多个独立对象。 std::pair 或 std::tuple 将多个值封装为单个对象。允许 Lambda 函数通过单一 return 返回多个值。
-    auto [frag_copy_A, frag_copy_B] = [&](){
-        return std::make_pair(thr_copy_A.retile_D(mma_A), thr_copy_B_4bit.retile_D(quant_frag));
-    }();
-
-    Tensor copy_tCrS = thr_copy_scale.retile_D(fragment_scale_input);
+    Tensor frag_copy_A = thr_copy_A.retile_D(mma_A);
+    Tensor frag_copy_B = thr_copy_B_4bit.retile_D(mma_B_4bit);
+    Tensor frag_copy_Scale = thr_copy_scale.retile_D(mma_Scale);
     
 //// Retile global counting tensors for copies: 
-    // retile_D：将数据 物理复制到目标布局（如寄存器）。
-    // retile_S：仅生成一个 逻辑视图，不实际移动数据（类似 reinterpret_cast）
-    // 生成一个逻辑视图 tAgA，其形状和步长与 tCgA 相同，但数据仍存储在原始位置（共享内存）
-    // 共享内存 → retile_S → 逻辑视图 (next step later → 寄存器 (实际复制))
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
     Tensor tBgB = thr_copy_B_4bit.retile_S(tCgB_4bit);
 
-//// Prepare for prefetch
-    // BLK_M, BLK_N, BLK_K, Num_SGs: Gemm Tile Atom information.
-    // tiled_copy_a: Copy Atom information
-    // prefetch_selector: 选择适合硬件架构的预取策略
-    auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(tiled_copy_a);
-    auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(tiled_copy_b_4bit);
-    // get_slice: 获取当前线程负责的预取分片
-    auto thr_prefetch_A = tiled_prefetch_a.get_slice(thread_idx);
-    auto thr_prefetch_B = tiled_prefetch_b.get_slice(thread_idx);
-    
-    // Partition global tile for prefetch
-    // partition_S：将全局数据划分为预取分片，生成逻辑视图（不实际移动数据）
-    // pAgA 和 pBgB：线程私有的全局内存分片视图，用于后续预取操作
-    // code analyze:
-    //   (1) 预取（Prefetch）的作用: 隐藏延迟：在计算当前分块时，异步预取下一个分块的数据到缓存或共享内存。
-    //   (2) partition_S vs partition_D:
-    //      partition_S: 生成逻辑视图（源布局），不实际移动数据
-    //      partition_D: 实际复制数据到目标布局（如共享内存→寄存器）
-    auto pAgA = thr_prefetch_A.partition_S(gA);
-    auto pBgB = thr_prefetch_B.partition_S(gB_4bit);
-  
-////
-//// Mainloop
-////
-    // 在矩阵乘法（GEMM）中动态计算每个线程块（CTA）需要处理的数据分块位置
     auto [m_idx, n_idx, k_idx, l_idx] = blk_coord_mnkl;
-    m_coord = m_idx * BLK_M + (get_sub_group_id() / ATOM_N) * SG_M; // m_idx * BLK_M：分块在 M 维度的起始全局坐标; (get_sub_group_id() / ATOM_N) * SG_M：子组在 M 维度的偏移（用于细粒度并行） 
+    //m_coord = m_idx * BLK_M + (get_sub_group_id() / ATOM_N) * SG_M; // m_idx * BLK_M：分块在 M 维度的起始全局坐标; (get_sub_group_id() / ATOM_N) * SG_M：子组在 M 维度的偏移（用于细粒度并行）
     n_coord = n_idx * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N; // n_idx * BLK_N：分块在 N 维度的起始全局坐标; (get_sub_group_id() % ATOM_N) * SG_N：子组在 N 维度的偏移
     l_coord = l_idx;
 
-    Tensor copy_iter_s = [&](){
+    Tensor tSgS = [&](){
         return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)), // 初始坐标：(n_coord, 0, l_coord)，表示从 N 维的 n_coord 开始，K 维从 0 开始
                            make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count), // 迭代器的逻辑形状：[2, 2, 1, k_tile_count]，表示每次迭代生成 2x2x1 的坐标块，共 k_tile_count 次
-                                       make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{}))); // 步长 [16, 32, 0, 1]：
-                                                                                                           //   E<0>{} * _16{}: 第一维度（N）的步长为 16;
-                                                                                                           //   E<0>{} * _32{}：第二维度（K）的步长为 32;
-                                                                                                           //   0{}：第三维度（L）的步长为 0（固定）;
-                                                                                                           //   E<1>{} * _1{}：第四维度（迭代次数）的步长为 1.
-                                                                                                           // E<0>{} 是一个编译时表达式，用于表示步长（Stride）或布局（Layout）中的占位符或动态值
-                                                                                                           //   E<N>：一个模板类，表示第 N 维的步长或索引，通常用于动态形状或步长的占位符
-                                                                                                           //   E<0>{}：表示第 0 维（最内层维度）的动态步长或索引值，具体值在运行时确定
+                           make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{}))); // 步长 [16, 32, 0, 1]：
     }();
-#if 0
+
+//// Prepare for prefetch
+    auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(tiled_copy_a);
+    auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(tiled_copy_b_4bit);
+
+    auto thr_prefetch_A = tiled_prefetch_a.get_slice(thread_idx);
+    auto thr_prefetch_B = tiled_prefetch_b.get_slice(thread_idx);
+    
+    auto pAgA = thr_prefetch_A.partition_S(gA);
+    auto pBgB = thr_prefetch_B.partition_S(gB_4bit);
+
+#if 1
   #define CUTLASS_ENABLE_DEBUG_PRINTS 1
   #if CUTLASS_ENABLE_DEBUG_PRINTS
   #define PRINT(x) print(#x ": "); print(x); print("\n");
@@ -582,9 +488,9 @@ public:
       }
   #undef PRINT
   #endif
-#endif  
+#endif
 
-    // crd2idx: 将多维逻辑坐标转换为线性索引
+//// Run mainloop
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = 0;
 
@@ -602,10 +508,16 @@ public:
       // Copy gmem to rmem for the first k_tile
       copy(tiled_copy_a, tAgA(_,_,_,k), frag_copy_A);
       copy(tiled_copy_b_4bit, tBgB(_,_,_,k/2), frag_copy_B);
+      copy(tiled_copy_scale, tSgS(_, _, _, k_start_idx + (k_tile / k_reload_factor)), frag_copy_Scale);
 
-      copy(tiled_copy_scale, copy_iter_s(_, _, _, k_start_idx + (k_tile / k_reload_factor)), copy_tCrS);
-      //dequant(quant_frag, mma_B_expanded, fragment_scale_input, quant_map);
-      dequant(quant_frag, mma_B, mma_A, fragment_scale_input, quant_map);
+#if 0
+auto pB_4bit = const_cast<ElementQuant*>(raw_pointer_cast(mma_B_4bit.data()));
+int num_B_4bit = decltype(size(mma_B_4bit))::value;
+for(int i=0; i<num_B_4bit; i++) {
+  printf("thread_idx = %d, num_B_4bit = %d, i = %d, pB_4bit = %d\n", thread_idx, (num_B_4bit), i, static_cast<int>(*(pB_4bit + i)));
+}
+#endif
+      dequant(mma_B_4bit, mma_B, mma_Scale, mma_A, quant_map);
 
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
@@ -613,32 +525,42 @@ public:
       if(prefetch_k < k_tile_count/2) {
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
+
+#if 0
 auto pA = const_cast<ElementA*>(raw_pointer_cast(mma_A.data()));
 int num_A = decltype(size(mma_A))::value;
 for(int i=0; i<num_A; i++) {
-  printf("num_A = %d, i = %d, pA = %f\n",num_A, i, *(pA+i));
+  printf("thread_idx = %d, num_A = %d, i = %d, pA = %f\n",thread_idx, num_A, i, *(pA+i));
 }
+#endif
+
+#if 0
 auto pB = const_cast<ElementA*>(raw_pointer_cast(mma_B.data()));
 int num_B = decltype(size(mma_B))::value;
 for(int i=0; i<num_B; i++) {
-  printf("num_B = %d, i = %d, pB = %f\n",num_B, i, *(pB+i));
+  printf("thread_idx = %d, num_B = %d, i = %d, pB = %f\n",thread_idx, num_B, i, *(pB+i));
 }
+#endif
+#if 0
 auto pAcc = const_cast<float*>(raw_pointer_cast(accumulators.data()));
 int num_Acc = decltype(size(accumulators))::value;
 for(int i=0; i<accumulators.size(); i++) {
-  printf("num_Acc = %d, i = %d, pAcc = %f\n",num_Acc, i, *(pAcc+i));
+  printf("thread_idx = %d, num_Acc = %d, i = %d, pAcc = %f\n",thread_idx, num_Acc, i, *(pAcc+i));
 }
+#endif
 
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
 
+#if 0
 for(int i=0; i<num_Acc; i++) {
-  printf("after gemm i = %d, pAcc = %f\n", i, *(pAcc+i));
+  printf("thread_idx = %d, after gemm i = %d, pAcc = %f\n",thread_idx, i, *(pAcc+i));
 }
+#endif
     }
+
     SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>((char*)nullptr);
     CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
-    //auto expanded_problem_size = ProblemShape{M, 2 * N, K, 1};
-    auto problem_shape_MNKL = append<4>(problem_size, 1);
+    auto problem_shape_MNKL = problem_size; //append<4>(problem_size, 1);
     epilogue(
       problem_shape_MNKL,
       subgroup_tile_shape,
@@ -681,7 +603,6 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   params.group_size = blocksize;
  
   StrideA stride_A = cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(m, k, l));
-  // shape: [m, k, l], stride: [1, k, m*k]
   auto mA_mkl = make_tensor(make_gmem_ptr(A), make_layout(make_shape(m, k, l), stride_A));
   Copy_A tiled_copy_a{Copy_A{}.with(mA_mkl)};
 
@@ -692,26 +613,25 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
 
   StrideB stride_B_4bit = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n, k/2, l));
   auto mB_nkl_4bit = make_tensor(make_gmem_ptr(B), make_layout(make_shape(n, k/2, l), stride_B_4bit));
-  Copy_B tiled_copy_b_4bit{Copy_B{}.with(mB_nkl_4bit)};
+  Copy_B_4bit tiled_copy_b_4bit{Copy_B_4bit{}.with(mB_nkl_4bit)};
   
   params.tiled_copy_a = tiled_copy_a;
   params.tiled_copy_b = tiled_copy_b;
   params.tiled_copy_b_4bit = tiled_copy_b_4bit;
  
   const int scale_k = cute::ceil_div(k, blocksize);
-  const int dq_mn_size = n;
-  // shape: [n, scale_k, 1], stride_S: [1, n, n * scale_k]
+  const int dq_mn_size = n; //A(m) or B(n)
   StrideScale stride_S = cutlass::make_cute_packed_stride(StrideScale{}, cute::make_shape(dq_mn_size, scale_k, l));
   auto mScale = make_tensor(
         make_gmem_ptr(absmax), //static_cast<NonVoidElementScale *>(absmax)),
-        make_layout(make_shape(n, scale_k, l), stride_S));
+        make_layout(make_shape(dq_mn_size, scale_k, l), stride_S));
   Copy_Scale tiled_copy_scale{Copy_Scale{}.with(mScale)};
 
   params.tiled_copy_scale = tiled_copy_scale;
 
   cutlass::KernelHardwareInfo hw_info;
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
-  auto problem_shape_MNKL = append<4>(problem_size, 1);
+  auto problem_shape_MNKL = problem_size; //append<4>(problem_size, 1);
   float alpha=1.0;
   float beta=0.f;
   StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(m, n, l));
@@ -727,7 +647,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   params.problem_shape = problem_size;
 
   // Launch Kernel
-  //local_range (workgroup_size): 8*4*1, 1, 1
+  //local_range (workgroup_size): 8*4*1*16, 1, 1
   //global_range (workgroup_size * inner_loop * workgroup_number): N/256, M/256, K/32 ??
   //tile_size (workgroup_size * inner_loop_number): 256, 256, 32
   //block: workgroup_size
