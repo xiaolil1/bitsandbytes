@@ -183,7 +183,7 @@ if not isinstance(lib, ErrorHandlerMockBNBNativeLibrary):
     ) -> torch.Tensor:
         shape = (*A.shape[:-1], shapeB[0])
         out = torch.zeros(shape, device=A.device, dtype=torch.float32)
-        _gemv_4bit_impl(A, B, shapeB, absmax, code, blocksize, out=out)
+        _gemv_4bit_impl(A, B, shapeB, absmax.bfloat16(), code, blocksize, out=out)
         return out
 
     @register_kernel("bitsandbytes::gemv_4bit.out", "xpu")

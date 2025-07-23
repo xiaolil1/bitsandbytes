@@ -14,6 +14,8 @@
 #include "cutlass/detail/layout.hpp"
 #include "cutlass/detail/mma.hpp"
 #include "cutlass/cuda_host_adapter.hpp"
+#include <cutlass/numeric_types.h>
+#include <cutlass/bfloat16.h>
 
 #include "cutlass/kernel_launch.h"
 #if !defined(__CUDACC_RTC__)
@@ -46,7 +48,7 @@ using ElementB = QuantType; //cutlass::gemm::collective::detail::deduce_mixed_wi
 
 using ElementMMA = ElementA;
 using ElementQuant = QuantType;
-using ElementScale = MmaType;
+using ElementScale = sycl::ext::oneapi::bfloat16; //MmaType;
 
 using ElementC = float;
 using ElementD = float;
@@ -63,11 +65,11 @@ using ProblemShape = Shape<int, int, int, int>;
 // inner_loop_number (Atom numbers per thread): (256/8) * (256/4) * (32/1)
 // XE_8x16x16_F32BF16BF16F32_TT -> hardware 指令
 // Stride<_4, _1, _0> could be optional?
-using TileShape = Shape<_256, _256, _32>;
+using TileShape = Shape<_256, _256, _32>; /*TODO: maybe need to adjust me for the small tile shapes*/
 //using TileShape = Shape<_32, _32, _32>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-                                  Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+                                  Layout<Shape<_8, _4, _1> /*TODO: maybe need to adjust me for the small tile shapes*/, Stride<_4, _1, _0>>>::TiledMMA;
 
 // Define Mainloop dispatch policy
 constexpr int PipelineStages = 1;
@@ -228,7 +230,12 @@ public:
       return Int<cute::gcd(Cosize, 32 / cute::min(sizeof_bits_v<SrcType>, sizeof_bits_v<DstType>))>{};
     }
   };
- 
+
+float bfloat16_to_float(uint16_t bf16_bits) {
+    uint32_t float_bits = (bf16_bits << 16);  // 将 bfloat16 左移16位转为 float
+    return reinterpret_cast<float&>(float_bits);
+}
+
    /// Utilities to transform A.
   template <class EngineIn,
             class EngineOut, 
@@ -251,20 +258,39 @@ public:
     static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
     static_assert(size_v<LayoutOut> == cosize_v<LayoutOut>);
 
-    for (int i = 0; i < size(tCrB_src); ++i) {
-//      uint8_t src_value = tCrB_src(i);
-//      tCrB_dst(2*i) = static_cast<ElementMMA>(quant_map[(src_value >> 4) & 0x0F]);// * tCrS(i/4) ;
-//      tCrB_dst(2*i+1) = static_cast<ElementMMA>(quant_map[src_value & 0x0F]);// * tCrS(i/4);
-    uint8_t packed = tCrB_src(i);
-    uint8_t high = (packed >> 4) & 0x0F;
-    uint8_t low = packed & 0x0F;
+    int scale_number = decltype(size(tCrS))::value;
+    int src_number = decltype(size(tCrB_src))::value;
+    int src_sub_number = src_number / scale_number;
 
-    // 应用缩放因子
-    float val_high = quant_map[high];// * tCrS(i/4); // 假设每32个元素共享一个scale
-    float val_low = quant_map[low];// * tCrS(i/4);
+    //float scale_value = 1.0;
 
-    tCrB_dst(2*i) = static_cast<ElementMMA>(val_high);
-    tCrB_dst(2*i+1) = static_cast<ElementMMA>(val_low);
+    if(cute::thread0()) printf("scale_number = %d, src_number= %d, src_sub_number = %d\n", scale_number, src_number, src_sub_number);
+    for(int i=0; i < scale_number; ++i) {
+      auto scale_value = tCrS(i);
+      float scale_value_float = static_cast<float>(scale_value);
+      //uint16_t scale_bits = reinterpret_cast<uint16_t&>(scale_value);
+      //uint16_t scale_bits = reinterpret_cast<uint16_t&>(scale_value);
+      //printf("scale_value = %f, tCrS(%d) raw bits: %d\n",scale_value, i, static_cast<int>(scale_value));
+      //float scale_value_float = bfloat16_to_float(scale_bits);
+      printf("scale_value_float = %f\n", scale_value_float);
+      for (int j = 0; j < src_sub_number; ++j) {
+        int offset = i * src_sub_number;
+        uint8_t packed = tCrB_src(offset + j);
+        uint8_t high = (packed >> 4) & 0x0F;
+        uint8_t low = packed & 0x0F;
+  
+        float val_high = quant_map[high];
+        float val_low = quant_map[low];
+  
+        float val_high_scaled = val_high * scale_value_float;
+        float val_low_scaled = val_high * scale_value_float;
+ 
+        //printf("scale value = %f, val_high_scaled = %f, val_low_scaled = %f\n", scale_value, val_high_scaled, val_low_scaled);
+        tCrB_dst(offset + 2 * j) = static_cast<ElementMMA>(val_high_scaled);// * scale_value;
+        tCrB_dst(offset + 2 * j + 1) = static_cast<ElementMMA>(val_low_scaled);// * scale_value;
+  
+        //printf("scale value = %f, val_high = %f, val_low = %f\n", scale_value, val_high, val_low);
+      }
     }
   }
   
@@ -387,7 +413,7 @@ public:
 
     Tensor tSgS = [&](){
         return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)), // 初始坐标：(n_coord, 0, l_coord)，表示从 N 维的 n_coord 开始，K 维从 0 开始
-                           make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count), // 迭代器的逻辑形状：[2, 2, 1, k_tile_count]，表示每次迭代生成 2x2x1 的坐标块，共 k_tile_count 次
+                           make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count / 2), // 迭代器的逻辑形状：[2, 2, 1, k_tile_count]，表示每次迭代生成 2x2x1 的坐标块，共 k_tile_count 次
                            make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{}))); // 步长 [16, 32, 0, 1]：
     }();
 
@@ -524,11 +550,19 @@ for(int i=0; i<num_Acc; i++) {
   }    
 };
 
+void convert_float_to_bfloat16_host(float* src, cutlass::bfloat16_t* dst, int size) {
+    for (int i = 0; i < size; ++i) {
+        dst[i] = static_cast<cutlass::bfloat16_t>(src[i]);  // 直接转换
+    }
+}
+
 template <typename T, int BITS>
 void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned char *B,
-                         float *absmax_, float *datatype, float *out, int lda,
+                         T *absmax_, float *datatype, float *out, int lda,
                          int ldb, int ldc, int blocksize, sycl::queue *stream) {
   std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!!!!!\n";
+
+
 
   sycl::queue q = *stream;
   using GemmKernel = kgemm_4bit_inference_cutlass_dequant<T, BITS>;
@@ -539,8 +573,26 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   //TODO(Xiaoli): FIX ME?? auto problem_size = ProblemShape{m, n, k};
   auto problem_size = ProblemShape{m, n, k, l};
   //TODO(Xiaoli): FIX ME
-  T* absmax = (T*)absmax_;
-  
+//  T* absmax = (T*)absmax_;
+//T* absmax = static_cast<T*>(absmax_);
+  //auto absmax = reinterpret_cast<ElementScale*>((T*)absmax_);
+  //int scale_size = 2048; 
+  //ElementScale* absmax = new ElementScale[scale_size];
+  //for (int i = 0; i < scale_size; ++i) {
+  //    absmax[i] = static_cast<ElementScale>(absmax_[i]);  // 逐元素转换
+  //    std::cout<<"absmax_[i] = "<<absmax_[i]<<"  absmax[i] = "<< absmax[i]<<std::endl;
+  //}
+
+//int N = 2048;
+//printf("A[0] = %f\n", A[0]);
+//printf("absmax_[0] = %f\n", absmax_[0]);
+//cutlass::bfloat16_t* absmax_test = new cutlass::bfloat16_t[N];
+//std::cout<<"absmax_[0] ==== "<<absmax_[0]<<std::endl;
+//convert_float_to_bfloat16_host(absmax_, absmax, N);
+//absmax_test[0] = static_cast<cutlass::bfloat16_t>(absmax[0]);
+//printf("absmax_test[0] = %f\n", absmax_test[0]);
+//std::cout<<"absmax_test[0] ==== "<<absmax_test[0]<<std::endl;
+#if 1
   // Init Params 
   using Params = GemmKernel::Params;
   Params params;
@@ -570,12 +622,16 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   params.tiled_copy_a = tiled_copy_a;
   params.tiled_copy_b = tiled_copy_b;
   params.tiled_copy_b_4bit = tiled_copy_b_4bit;
- 
-  const int scale_k = cute::ceil_div(k, blocksize);
+
+//float f = 1.0f;
+//cutlass::bfloat16_t bf16 = static_cast<cutlass::bfloat16_t>(f);
+//std::cout<<"k = "<<k<<" blocksize = "<<blocksize<<std::endl;
+  const int scale_k = cute::ceil_div(k / 2, blocksize);
+std::cout<<"n = "<<n<<" k = "<<k<<" blocksize = "<<blocksize<<" scale_k = "<<scale_k<<std::endl;
   const int dq_mn_size = n; //A(m) or B(n)
   StrideScale stride_S = cutlass::make_cute_packed_stride(StrideScale{}, cute::make_shape(dq_mn_size, scale_k, l));
   auto mScale = make_tensor(
-        make_gmem_ptr(absmax), //static_cast<NonVoidElementScale *>(absmax)),
+        make_gmem_ptr(absmax_), //static_cast<ElementScale *>(absmax)),
         make_layout(make_shape(dq_mn_size, scale_k, l), stride_S));
   Copy_Scale tiled_copy_scale{Copy_Scale{}.with(mScale)};
 
@@ -627,10 +683,11 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
   EventManager::getInstance().addEvent(event);
   //syclcompat::wait();
+#endif  
 }
 
 template void gemm_4bit_inference_cutlass_dequant<sycl::ext::oneapi::bfloat16, 16>(
     int m, int n, int k, sycl::ext::oneapi::bfloat16 *A, unsigned char *B,
-    float *absmax, float *datatype, float *out, int lda,
+    sycl::ext::oneapi::bfloat16 *absmax, float *datatype, float *out, int lda,
     int ldb, int ldc, int blocksize, sycl::queue *stream);
 
