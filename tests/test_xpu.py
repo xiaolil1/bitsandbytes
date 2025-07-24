@@ -85,11 +85,12 @@ class TestXPU:
             quant_storage=quant_storage,
             blocksize=32,
         )
+
         ##pdb.set_trace()
         C3 = torch.matmul(A, B.t())
-        pdb.set_trace()
+        #pdb.set_trace()
         C2 = F.gemv_4bit(A, qB.t(), state=state)
-        pdb.set_trace()
+        #pdb.set_trace()
         diff = abs(C2-C3)
         print("diff = ", diff.sum())
         print(C3[0])

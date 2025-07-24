@@ -48,7 +48,7 @@ using ElementB = QuantType; //cutlass::gemm::collective::detail::deduce_mixed_wi
 
 using ElementMMA = ElementA;
 using ElementQuant = QuantType;
-using ElementScale = sycl::ext::oneapi::bfloat16; //MmaType;
+using ElementScale = MmaType; //sycl::ext::oneapi::bfloat16; //MmaType;
 
 using ElementC = float;
 using ElementD = float;
@@ -260,11 +260,12 @@ float bfloat16_to_float(uint16_t bf16_bits) {
 
     int scale_number = decltype(size(tCrS))::value;
     int src_number = decltype(size(tCrB_src))::value;
+    int dst_number = decltype(size(tCrB_dst))::value;
     int src_sub_number = src_number / scale_number;
 
     //float scale_value = 1.0;
 
-    if(cute::thread0()) printf("scale_number = %d, src_number= %d, src_sub_number = %d\n", scale_number, src_number, src_sub_number);
+    if(cute::thread0()) printf("scale_number = %d, src_number= %d, src_sub_number = %d, dst_number = %d\n", scale_number, src_number, src_sub_number, dst_number);
     for(int i=0; i < scale_number; ++i) {
       auto scale_value = tCrS(i);
       float scale_value_float = static_cast<float>(scale_value);
@@ -272,7 +273,7 @@ float bfloat16_to_float(uint16_t bf16_bits) {
       //uint16_t scale_bits = reinterpret_cast<uint16_t&>(scale_value);
       //printf("scale_value = %f, tCrS(%d) raw bits: %d\n",scale_value, i, static_cast<int>(scale_value));
       //float scale_value_float = bfloat16_to_float(scale_bits);
-      printf("scale_value_float = %f\n", scale_value_float);
+      //printf("scale_value_float = %f\n", scale_value_float);
       for (int j = 0; j < src_sub_number; ++j) {
         int offset = i * src_sub_number;
         uint8_t packed = tCrB_src(offset + j);
@@ -282,13 +283,14 @@ float bfloat16_to_float(uint16_t bf16_bits) {
         float val_high = quant_map[high];
         float val_low = quant_map[low];
   
-        float val_high_scaled = val_high * scale_value_float;
-        float val_low_scaled = val_high * scale_value_float;
+        float val_high_scaled = val_high; // cale_value_float;
+        float val_low_scaled = val_high; // * scale_value_float;
  
         //printf("scale value = %f, val_high_scaled = %f, val_low_scaled = %f\n", scale_value, val_high_scaled, val_low_scaled);
         tCrB_dst(offset + 2 * j) = static_cast<ElementMMA>(val_high_scaled);// * scale_value;
         tCrB_dst(offset + 2 * j + 1) = static_cast<ElementMMA>(val_low_scaled);// * scale_value;
   
+        //printf("packed = %d, high = %d, low = %d, val_high = %f, val_low = %f\n",static_cast<int>(packed), static_cast<int>(high), static_cast<int>(low), val_high, val_low);
         //printf("scale value = %f, val_high = %f, val_low = %f\n", scale_value, val_high, val_low);
       }
     }
@@ -413,7 +415,7 @@ float bfloat16_to_float(uint16_t bf16_bits) {
 
     Tensor tSgS = [&](){
         return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)), // 初始坐标：(n_coord, 0, l_coord)，表示从 N 维的 n_coord 开始，K 维从 0 开始
-                           make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count / 2), // 迭代器的逻辑形状：[2, 2, 1, k_tile_count]，表示每次迭代生成 2x2x1 的坐标块，共 k_tile_count 次
+                           make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count), // 迭代器的逻辑形状：[2, 2, 1, k_tile_count]，表示每次迭代生成 2x2x1 的坐标块，共 k_tile_count 次
                            make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{}))); // 步长 [16, 32, 0, 1]：
     }();
 
@@ -427,7 +429,7 @@ float bfloat16_to_float(uint16_t bf16_bits) {
     auto pAgA = thr_prefetch_A.partition_S(gA);
     auto pBgB = thr_prefetch_B.partition_S(gB_4bit);
 
-#if 1
+#if 0
   #define CUTLASS_ENABLE_DEBUG_PRINTS 1
   #if CUTLASS_ENABLE_DEBUG_PRINTS
   #define PRINT(x) print(#x ": "); print(x); print("\n");
@@ -486,7 +488,7 @@ float bfloat16_to_float(uint16_t bf16_bits) {
       // Copy gmem to rmem for the first k_tile
       copy(tiled_copy_a, tAgA(_,_,_,k), frag_copy_A);
       copy(tiled_copy_b_4bit, tBgB(_,_,_,k/2), frag_copy_B);
-      copy(tiled_copy_scale, tSgS(_, _, _, k_start_idx + (k_tile / k_reload_factor)), frag_copy_Scale);
+      copy(tiled_copy_scale, tSgS(_, _, _, k_start_idx * 2 + (k_tile / k_reload_factor)), frag_copy_Scale);
 
 #if 0
 auto pB_4bit = const_cast<ElementQuant*>(raw_pointer_cast(mma_B_4bit.data()));
@@ -495,7 +497,39 @@ for(int i=0; i<num_B_4bit; i++) {
   printf("thread_idx = %d, num_B_4bit = %d, i = %d, pB_4bit = %d\n", thread_idx, (num_B_4bit), i, static_cast<int>(*(pB_4bit + i)));
 }
 #endif
-      dequant(mma_B_4bit, mma_B, mma_Scale, mma_A, quant_map);
+#if 1
+     dequant(mma_B_4bit, mma_B, mma_Scale, mma_A, quant_map);
+#else     
+    int scale_number = decltype(size(mma_Scale))::value;
+    int src_number = decltype(size(mma_B_4bit))::value;
+    int dst_number = decltype(size(mma_B))::value;
+    int src_sub_number = src_number;// / scale_number;
+
+    //float scale_value = 1.0;
+
+    //if(cute::thread0()) printf("scale_number = %d, src_number= %d, src_sub_number = %d, dst_number = %d\n", scale_number, src_number, src_sub_number, dst_number);
+    //for(int i=0; i < scale_number; ++i) {
+      for (int j = 0; j < src_sub_number; ++j) {
+        int offset = 0;//i * src_sub_number;
+        uint8_t packed = mma_B_4bit(offset + j);
+        uint8_t high = (packed >> 4) & 0x0F;
+        uint8_t low = packed & 0x0F;
+
+        float val_high = quant_map[high];
+        float val_low = quant_map[low];
+
+        float val_high_scaled = val_high; // cale_value_float;
+        float val_low_scaled = val_high; // * scale_value_float;
+
+        mma_B(offset + 2 * j) = static_cast<ElementMMA>(val_high_scaled);// * scale_value;
+        mma_B(offset + 2 * j + 1) = static_cast<ElementMMA>(val_low_scaled);// * scale_value;
+
+        //if(thread_idx >= 80 && thread_idx<120)
+        //printf("k_tile_count=%d, k_start_idx=%d, thread_idx=%d, k=%d, k_tile=%d, prefetch_k=%d, packed=%d, high=%d, low=%d, val_high=%f, val_low=%f\n",k_tile_count, k_start_idx, thread_idx, k, k_tile, prefetch_k, static_cast<int>(packed), static_cast<int>(high), static_cast<int>(low), val_high, val_low);
+      }
+    //}
+#endif
+
 
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
