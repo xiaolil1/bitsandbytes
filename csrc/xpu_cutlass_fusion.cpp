@@ -136,6 +136,27 @@ using atom_load_B = Copy_Atom<traits_load_B, ElementB>;
 using val_layout_load_B = decltype(make_layout(shape_div(typename traits_load_B::BlockShape{}, CopyThreadShape{})));
 using Copy_B = decltype(make_tiled_copy(atom_load_B{}, Layout<CopyThreadShape>{}, val_layout_load_B{}));
 
+using GmemTiledCopyB_4bit = XE_2D_U8x32x32_LD_V;  // U8  (1-byte) block copy for 8bit-B (narrower type)
+using StrideB_4bit = cutlass::gemm::TagToStrideB_t<cutlass::layout::RowMajor>;
+using traits_load_B_4bit = Copy_Traits<GmemTiledCopyB_4bit, StrideB_4bit>;
+using atom_load_B_4bit = Copy_Atom<traits_load_B_4bit, ElementB>;
+//using CopyThreadShape2= Shape<_2, Int<SubgroupSize>>;
+using val_layout_load_B_4bit = decltype(make_layout(shape_div(typename traits_load_B_4bit::BlockShape{}, CopyThreadShape{})));
+using Copy_B_4bit = decltype(make_tiled_copy(atom_load_B_4bit{}, Layout<CopyThreadShape>{}, val_layout_load_B_4bit{}));
+
+//using GmemTiledCopyB_4bit = XE_2D_U8x32x16_LD_V;
+//using StrideB_4bit = cutlass::gemm::TagToStrideB_t<cutlass::layout::RowMajor>;
+//auto layout_in = make_layout(Shape<_32, _16>{}, Stride<_16, _1>{});
+//using BlockShape_4bit = Shape<_32, _16>;
+//using traits_load_B_4bit = Copy_Traits<GmemTiledCopyB_4bit, StrideB_4bit, BlockShape_4bit, decltype(layout_in)>;
+//using CopyThreadShape2 = Shape<_2, Int<SubgroupSize>>;            // 每个线程处理 2x16 数据
+//using val_layout_load_B_4bit = decltype(make_layout(Shape<_2, _16>{}));  // 2x16
+//using Copy_B_4bit = decltype(make_tiled_copy(
+//    Copy_Atom<traits_load_B_4bit, cutlass::uint4b_t>{},  // 4-bit 数据类型
+//    Layout<CopyThreadShape2>{},                            // 线程分块布局 (2,16)
+//    val_layout_load_B_4bit{}                              // 寄存器布局 (2,16)
+//));
+
 using GmemTiledCopyScale = XE_2D_U16x1x32_LD_N;
 using StrideScale = cute::Stride<_1, int64_t, int64_t>; //dynamic stride
 using CopyThreadShapeRev = decltype(cute::reverse(CopyThreadShape{}));
@@ -196,7 +217,7 @@ public:
 
 	  Copy_A tiled_copy_a;
     Copy_B tiled_copy_b;
-    Copy_B tiled_copy_b_4bit;
+    Copy_B_4bit tiled_copy_b_4bit;
 	  Copy_Scale tiled_copy_scale;
     int group_size;
 	
@@ -259,7 +280,7 @@ float bfloat16_to_float(uint16_t bf16_bits) {
     static_assert(size_v<LayoutOut> == cosize_v<LayoutOut>);
 
     int scale_number = decltype(size(tCrS))::value;
-    int src_number = decltype(size(tCrB_src))::value;
+    int src_number = decltype(size(tCrB_src))::value / 2;
     int dst_number = decltype(size(tCrB_dst))::value;
     int src_sub_number = src_number / scale_number;
 
@@ -283,8 +304,8 @@ float bfloat16_to_float(uint16_t bf16_bits) {
         float val_high = quant_map[high];
         float val_low = quant_map[low];
   
-        float val_high_scaled = val_high; // cale_value_float;
-        float val_low_scaled = val_high; // * scale_value_float;
+        float val_high_scaled = val_high * scale_value_float;
+        float val_low_scaled = val_high * scale_value_float;
  
         //printf("scale value = %f, val_high_scaled = %f, val_low_scaled = %f\n", scale_value, val_high_scaled, val_low_scaled);
         tCrB_dst(offset + 2 * j) = static_cast<ElementMMA>(val_high_scaled);// * scale_value;
@@ -391,17 +412,24 @@ float bfloat16_to_float(uint16_t bf16_bits) {
 	
     Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_a, tCgA(_,_,_,0).shape()));
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b, tCgB(_,_,_,0).shape()));
-    Tensor mma_B_4bit = make_tensor<ElementQuant>(make_fragment_layout(tiled_copy_b_4bit, tCgB_4bit(_,_,_,0).shape()));
+    //Tensor mma_B_4bit = make_tensor<ElementQuant>(make_fragment_layout(tiled_copy_b_4bit, tCgB_4bit(_,_,_,0).shape()));
+    //Tensor dequant_frag = make_tensor<ElementQuant>(make_fragment_layout(tiled_copy_b_4bit, cute::make_shape(Int<16>{}, Int<4>{}, Int<1>{})));
+    Tensor dequant_frag = make_tensor<ElementQuant>(make_fragment_layout(tiled_copy_b_4bit, tCgB_4bit(_,_,_,0).shape()));
+
+
+    //Tensor dequant_frag = make_tensor<float>(make_shape(64));
+    //clear(dequant_frag);
 
     Tensor mma_Scale = make_tensor<ElementScale>(Layout<Shape<_2, _2, _1>>{});
+    clear(mma_Scale);
 
-    static_assert(std::is_same_v<typename decltype(mma_B_4bit)::value_type, ElementQuant>);
+    static_assert(std::is_same_v<typename decltype(dequant_frag)::value_type, ElementQuant>);
     static_assert(std::is_same_v<typename decltype(mma_A)::value_type, ElementMMA>);
     static_assert(std::is_same_v<typename decltype(mma_B)::value_type, ElementMMA>);
 
 //// Retile for copy
     Tensor frag_copy_A = thr_copy_A.retile_D(mma_A);
-    Tensor frag_copy_B = thr_copy_B_4bit.retile_D(mma_B_4bit);
+    Tensor frag_copy_B = thr_copy_B_4bit.retile_D(dequant_frag);
     Tensor frag_copy_Scale = thr_copy_scale.retile_D(mma_Scale);
     
 //// Retile global counting tensors for copies: 
@@ -416,7 +444,7 @@ float bfloat16_to_float(uint16_t bf16_bits) {
     Tensor tSgS = [&](){
         return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)), // 初始坐标：(n_coord, 0, l_coord)，表示从 N 维的 n_coord 开始，K 维从 0 开始
                            make_layout(make_shape(_2{}, _2{}, _1{}, k_tile_count), // 迭代器的逻辑形状：[2, 2, 1, k_tile_count]，表示每次迭代生成 2x2x1 的坐标块，共 k_tile_count 次
-                           make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{}))); // 步长 [16, 32, 0, 1]：
+                           make_stride(E<0>{} * _16{}, E<0>{} * _32{}, _0{}, E<1>{} * _1{})));
     }();
 
 //// Prepare for prefetch
@@ -429,7 +457,7 @@ float bfloat16_to_float(uint16_t bf16_bits) {
     auto pAgA = thr_prefetch_A.partition_S(gA);
     auto pBgB = thr_prefetch_B.partition_S(gB_4bit);
 
-#if 0
+#if 1
   #define CUTLASS_ENABLE_DEBUG_PRINTS 1
   #if CUTLASS_ENABLE_DEBUG_PRINTS
   #define PRINT(x) print(#x ": "); print(x); print("\n");
@@ -446,10 +474,16 @@ float bfloat16_to_float(uint16_t bf16_bits) {
         print("  gB_4bit : ");   print(gB_4bit);   print("\n");
         print("  tCgB : "); print(tCgB); print("\n");
         print("  tCgB_4bit : "); print(tCgB_4bit); print("\n");
+        print("  tCgB_4bit(_,_,_,0).shape() : "); print(tCgB_4bit(_,_,_,0).shape()); print("\n");
         print("  tBgB : "); print(tBgB); print("\n");
         print("  mma_B : "); print(mma_B); print("\n");
-        print("  mma_B_4bit : "); print(mma_B_4bit); print("\n");
+        print("  dequant_frag : "); print(dequant_frag); print("\n");
         print("  frag_copy_B : "); print(frag_copy_B); print("\n");
+
+        print("=====================  Config: \n");
+        print("  mma_Scale : "); print(mma_Scale); print("\n");
+        print("  frag_copy_Scale : "); print(frag_copy_Scale); print("\n");
+        print("  tSgS : "); print(tSgS); print("\n");
 
         print("=====================  Config: \n");
         print("  threads per workgroup : "); print(MaxThreadsPerBlock);  print("\n");
@@ -470,14 +504,14 @@ float bfloat16_to_float(uint16_t bf16_bits) {
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
-      if(prefetch_k < k_tile_count) {
-        prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
-      }
-      if(prefetch_k < k_tile_count/2) {
-        prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
-      }
-      //prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
-      //prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
+      //if(prefetch_k < k_tile_count) {
+      //  prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
+      //}
+      //if(prefetch_k < k_tile_count/2) {
+      //  prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
+      //}
+      prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
+      prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
 
     const int k_reload_factor = params.group_size / BLK_K;
@@ -488,6 +522,8 @@ float bfloat16_to_float(uint16_t bf16_bits) {
       // Copy gmem to rmem for the first k_tile
       copy(tiled_copy_a, tAgA(_,_,_,k), frag_copy_A);
       copy(tiled_copy_b_4bit, tBgB(_,_,_,k/2), frag_copy_B);
+      //auto coord = make_coord(_, _, _, k_start_idx * 2 + (k_tile / k_reload_factor));
+      //copy(tiled_copy_scale, tSgS(coord), frag_copy_Scale);
       copy(tiled_copy_scale, tSgS(_, _, _, k_start_idx * 2 + (k_tile / k_reload_factor)), frag_copy_Scale);
 
 #if 0
@@ -498,7 +534,7 @@ for(int i=0; i<num_B_4bit; i++) {
 }
 #endif
 #if 1
-     dequant(mma_B_4bit, mma_B, mma_Scale, mma_A, quant_map);
+     dequant(dequant_frag, mma_B, mma_Scale, mma_A, quant_map);
 #else     
     int scale_number = decltype(size(mma_Scale))::value;
     int src_number = decltype(size(mma_B_4bit))::value;
@@ -534,7 +570,7 @@ for(int i=0; i<num_B_4bit; i++) {
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
       }
-      if(prefetch_k < k_tile_count/2) {
+      if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
 
@@ -651,7 +687,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
 
   StrideB stride_B_4bit = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n, k/2, l));
   auto mB_nkl_4bit = make_tensor(make_gmem_ptr(B), make_layout(make_shape(n, k/2, l), stride_B_4bit));
-  Copy_B tiled_copy_b_4bit{Copy_B{}.with(mB_nkl_4bit)};
+  Copy_B_4bit tiled_copy_b_4bit{Copy_B{}.with(mB_nkl_4bit)};
   
   params.tiled_copy_a = tiled_copy_a;
   params.tiled_copy_b = tiled_copy_b;
@@ -660,7 +696,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
 //float f = 1.0f;
 //cutlass::bfloat16_t bf16 = static_cast<cutlass::bfloat16_t>(f);
 //std::cout<<"k = "<<k<<" blocksize = "<<blocksize<<std::endl;
-  const int scale_k = cute::ceil_div(k / 2, blocksize);
+  const int scale_k = cute::ceil_div(k, blocksize);
 std::cout<<"n = "<<n<<" k = "<<k<<" blocksize = "<<blocksize<<" scale_k = "<<scale_k<<std::endl;
   const int dq_mn_size = n; //A(m) or B(n)
   StrideScale stride_S = cutlass::make_cute_packed_stride(StrideScale{}, cute::make_shape(dq_mn_size, scale_k, l));
