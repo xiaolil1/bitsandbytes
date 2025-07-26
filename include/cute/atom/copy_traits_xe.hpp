@@ -235,7 +235,7 @@ struct XE_2D_LD_Unpack {
 
   template <class... TensorArgs>
   XE_2D_LD_Unpack(Tensor<TensorArgs...> const &tensor) {
-    base_ptr = tensor.data().get();
+    base_ptr = raw_pointer_cast(tensor.data());
 
     if constexpr (is_need_reversed)
     {
