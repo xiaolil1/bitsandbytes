@@ -450,7 +450,7 @@ struct XE_2D_U8x32x32_LD_N {
 #if defined(SYCL_INTEL_TARGET)
     //detail::XeSubgroup2DBlockPrefetch<1, 32, 32, 1>{}(baseoffset, width, height, pitch, coord);
         __builtin_IB_subgroup_block_read_prefetch_u8_m32k32v1(
-            (intptr_t)(baseoffset), width, height, pitch, coord, CacheControl::kL1C_L3C);
+            (intptr_t)(baseoffset), width-1, height-1, pitch-1, coord, CacheControl::kL1C_L3C);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
