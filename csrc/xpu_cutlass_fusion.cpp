@@ -59,6 +59,7 @@ using ElementOutput = float;
 using ProblemShape = Shape<int, int, int, int>;
 
 using TileShape = Shape<_16, _64, _64>;
+using TileShape_half = Shape<_16, _64, _32>;
 using TiledMma =
       typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32F16F16F32_TT>, Layout<TileShape>,
                                     Layout<Shape<_1, _2, _1>, Stride<_2, _1, _0>>>::TiledMMA;
@@ -138,6 +139,7 @@ using Copy_A = decltype(make_tiled_copy(atom_load_A{}, Layout<CopyThreadShape>{}
 
 using GmemTiledCopyB = XE_2D_U4x32x16_LD_T; 
 using StrideB = cutlass::gemm::TagToStrideB_t<cutlass::layout::ColumnMajor>;
+//using StrideB = Stride<int64_t, int64_t, int64_t>;
 //using Copy_B = typename Copy_Traits<GmemTiledCopyB, StrideB>::template DefaultTiledCopy<ElementB>;
 using traits_load_B = Copy_Traits<GmemTiledCopyB, StrideB>;
 using atom_load_B = Copy_Atom<traits_load_B, ElementB>;
@@ -234,7 +236,10 @@ public:
       //out[i] = static_cast<DstType>(quant_map[in_ptr_8[i].data()]);
       uint8_t value = in[i].get();
       out[i] = static_cast<DstType>(quant_map[value]);
-      if(cute::thread0()) printf("thread_idx = %d, i = %d, value_bit = %x, value = %d, quant_map[value] = %f, out[i] = %f\n",int(ThreadIdxX()), i, value, static_cast<int>(value), quant_map[value], static_cast<float>(out[i]));
+      int thread_idx = int(ThreadIdxX());
+      //if(thread_idx == 0)
+      if(syclcompat::global_id::x() == 2 && syclcompat::global_id::y() ==0 && syclcompat::global_id::z() ==0 )
+      printf("thread_idx = %d, i = %d, value_bit = %x, value = %d, quant_map[value] = %f, out[i] = %f\n",thread_idx, i, value, static_cast<int>(value), quant_map[value], static_cast<float>(out[i]));
     }
 #else    
     static constexpr auto N = decltype(size<1>(in))::value;
@@ -330,7 +335,7 @@ if(cute::thread0())
       l_coord = BlockIdxZ();
     }
     auto blk_coord_mnkl = make_coord(m_coord, n_coord, _, l_coord);
-    if(cute::thread0()) {
+    if(0){//cute::thread0()) {
       printf("M = %d, N=%d, K=%d, L=%d\n", M, N, K, L);
     //}
       printf("thread_idx = %d, m_coord = %d, n_coord = %d, l_coord = %d, BlockIdxX() = %d, BlockIdxY() = %d, BlockIdxZ() = %d\n",thread_idx, m_coord, n_coord, l_coord, BlockIdxX(), BlockIdxY(), BlockIdxZ());
@@ -414,7 +419,7 @@ if(cute::thread0())
 //                                      make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename GmemTiledCopyScale::BlockShape{}), _0{}, E<1>{} * _1{})));
 //      
 //    }();
-
+#if 0
   #define PRINT(x) print(#x ": "); print(x); print("\n");
     if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
         print("======================= A: \n");
@@ -442,7 +447,7 @@ if(cute::thread0())
         print("  pBgB :    "); print(pBgB); print("\n");
       }
   #undef PRINT
-  
+#endif  
 	const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = k_start_idx;
 
@@ -466,7 +471,7 @@ if(cute::thread0())
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
       }
-      if(prefetch_k < k_tile_count / 2) {
+      if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
 
@@ -517,13 +522,10 @@ if(cute::thread0())
 };
 
 template <typename T, int BITS>
-void gemm_4bit_inference_cutlass_dequant(int m, int n, int k_, T *A, unsigned char *B,
+void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned char *B,
                          T *absmax_, float *datatype, float *out, int lda,
                          int ldb, int ldc, int blocksize, sycl::queue *stream) {
   std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!!!!!\n";
-
-int k = k_;
-
 
   sycl::queue q = *stream;
   using GemmKernel = kgemm_4bit_inference_cutlass_dequant<T, BITS>;
@@ -555,7 +557,7 @@ int k = k_;
   auto mA_mkl = make_tensor(make_gmem_ptr(A), make_layout(make_shape(m, k, l), stride_A));
   Copy_A tiled_copy_a{Copy_A{}.with(mA_mkl)};
 
-  StrideB stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n, k, l));
+  //StrideB stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n/2, k, l));
 //  auto stride_B_custom = cute::make_stride(
 //    cute::Int<1>{},                          // 连续维度步幅（字节）
 //    (n * 4 + 7) / 8,            // pitch = ceil(n * 4bit / 8bit)
@@ -568,8 +570,19 @@ int k = k_;
 //        (n * 4 ) / 8,
 //        (n * k * 4 ) / 8
 //    );
+  //int k_half = k/2;
+  //StrideB stride_B = make_stride(int64_t{1}, int64_t{n}, int64_t{n * k}); 
+  StrideB stride_B = make_stride(int64_t{n}, cute::Int<1>{}, int64_t{0}); 
   auto mB_nkl = make_tensor(cute::subbyte_iterator<uint4_t>(B), make_layout(make_shape(n, k, l), stride_B));
   Copy_B tiled_copy_b{Copy_B{}.with(mB_nkl)};
+
+  #define PRINT(x) print(#x ": "); print(x); print("\n");
+    if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
+        print("=====================  B :\n");
+        print("  stride_B : ");   print(stride_B);   print("\n");
+        print("=====================  B :\n");
+      }
+  #undef PRINT
 
   params.tiled_copy_a = tiled_copy_a;
   params.tiled_copy_b = tiled_copy_b;
