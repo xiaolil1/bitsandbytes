@@ -91,6 +91,8 @@ class TestXPU:
         #pdb.set_trace()
         C2 = F.gemv_4bit(A, qB.t(), state=state)
         #pdb.set_trace()
+        print("C3.sum() = ", C3.sum())
+        print("C2.sum() = ", C2.sum())
         diff = abs(C2-C3)
         print("diff = ", diff.sum())
         print(C3[0])
