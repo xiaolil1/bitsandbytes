@@ -58,10 +58,10 @@ using ElementOutput = float;
 
 using ProblemShape = Shape<int, int, int, int>;
 
-using TileShape = Shape<_16, _64, _64>;
+using TileShape = Shape<_256, _256, _32>;
 using TiledMma =
       typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-                                    Layout<Shape<_1, _2, _1>, Stride<_2, _1, _0>>>::TiledMMA;
+                                    Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 
 using WorkgroupTileShape = TileShape;
 static constexpr auto BLK_M = get<0>(WorkgroupTileShape{}); //16
@@ -128,7 +128,7 @@ using ClusterShape = typename DispatchPolicy::ClusterShape;
 using CopyThreadShape = Shape<_1, Int<SubgroupSize>>;
 using CopyThreadShapeRev = decltype(cute::reverse(CopyThreadShape{}));
 
-using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
+using GmemTiledCopyA = XE_2D_U16x32x32_LD_N; //XE_2D_U16x16x32_LD_N;
 using StrideA = cutlass::gemm::TagToStrideA_t<cutlass::layout::RowMajor>;
 //using Copy_A = typename Copy_Traits<GmemTiledCopyA, StrideA>::template DefaultTiledCopy<ElementA>;
 using traits_load_A = Copy_Traits<GmemTiledCopyA, StrideA>;
@@ -287,7 +287,7 @@ public:
         for (int i = 0; i < vec_size; i++) {
           uint8_t value = (format_data >> (src_bits * i)) & 0xf;
           dst[i] = static_cast<DstType>(quant_map[value] * static_cast<float>(ts));          
-          //if(cute::thread0()) printf("n = %d, s = %d, i = %d, src = %d, quant_map[value] = %f, ts = %f, dst = %f\n", n, s, i, static_cast<int>(value), quant_map[value], static_cast<float>(ts), static_cast<float>(dst[i]));
+          if(cute::thread0()) printf("n = %d, s = %d, i = %d, src = %d, quant_map[value] = %f, ts = %f, dst = %f\n", n, s, i, static_cast<int>(value), quant_map[value], static_cast<float>(ts), static_cast<float>(dst[i]));
         }
       }
     }
@@ -303,12 +303,12 @@ public:
     int K = params.k;
     int L = 1;
 
-const int BLK_M = 16;
-const int BLK_N = 64;
-const int BLK_K = 64;
+const int BLK_M = 256;
+const int BLK_N = 256;
+const int BLK_K = 32;
 
-const int ATOM_M = 1;
-const int ATOM_N = 2;
+const int ATOM_M = 8;
+const int ATOM_N = 4;
 const int ATOM_K = 1;
 
 const int SG_M = ceil_div(BLK_M, ATOM_M);
