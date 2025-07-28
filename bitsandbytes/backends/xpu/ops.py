@@ -84,6 +84,9 @@ def _gemv_4bit_impl(
     ldb = ct.c_int32((A.shape[-1] + 1) // 2)
     ldc = m
 
+    absmax = absmax * 10
+    pdb.set_trace()
+
     stream = _get_tensor_stream(A)
     if A.dtype == torch.float16:
         lib.cgemv_4bit_inference_fp16(
@@ -108,7 +111,7 @@ def _gemv_4bit_impl(
             k,
             get_ptr(A),
             get_ptr(B),
-            get_ptr(absmax),
+            get_ptr(absmax.bfloat16()),
             get_ptr(code),
             get_ptr(out),
             lda,
