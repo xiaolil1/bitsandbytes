@@ -228,7 +228,7 @@ public:
     using SrcType = typename EngineIn::value_type;
     using DstType = typename EngineOut::value_type;
     //using ScaleType = typename EngineScales::value_type;
-#if 1
+#if 0
     int numbers = decltype(size(in))::value;
     for(int i=0; i<numbers; i++){
       //auto in_ptr_8 = (uint8_t*)(raw_pointer_cast(in.data()));
@@ -259,8 +259,8 @@ public:
     auto s_tensor = make_tensor((format_type*)(raw_pointer_cast(in.data())), Shape<Int<loop_cnt / scalar>, Int<N>>{});
     auto d_tensor = make_tensor(out.data(), Shape<Int<vec_size>, Int<splits>, Int<N>>{});
 
-if(cute::thread0())
-  printf("thread_idx = %d, decltype(size(in))::value = %d, K = %d, N = %d, L = %d, src_bits = %d, sizeof_bits_v<format_type> = %d, scalar = %d, decltype(size(out))::value = %d, loop_cnt = %d, splits = %d\n",int(ThreadIdxX()), decltype(size(in))::value, decltype(size<0>(in))::value, N, decltype(size<2>(in))::value, src_bits, sizeof_bits_v<format_type>, scalar, decltype(size(out))::value, loop_cnt, splits);
+//if(cute::thread0())
+//  printf("thread_idx = %d, decltype(size(in))::value = %d, K = %d, N = %d, L = %d, src_bits = %d, sizeof_bits_v<format_type> = %d, scalar = %d, decltype(size(out))::value = %d, loop_cnt = %d, splits = %d\n",int(ThreadIdxX()), decltype(size(in))::value, decltype(size<0>(in))::value, N, decltype(size<2>(in))::value, src_bits, sizeof_bits_v<format_type>, scalar, decltype(size(out))::value, loop_cnt, splits);
 
     for (int n = 0; n < N; n++) {
       //const auto ts = tCrS_input(n);
@@ -276,8 +276,7 @@ if(cute::thread0())
         for (int i = 0; i < vec_size; i++) {
           uint8_t value = (format_data >> (src_bits * i)) & 0xf;
           dst[i] = (static_cast<DstType>(quant_map[value]));// * ts;          
-          //if(cute::thread0())
-          printf("n = %d, s = %d, i = %d, src = %d, dst = %f\n", n, s, i, static_cast<int>(value), static_cast<float>(dst[i]));
+          //if(cute::thread0()) printf("n = %d, s = %d, i = %d, src = %d, dst = %f\n", n, s, i, static_cast<int>(value), static_cast<float>(dst[i]));
         }
       }
     }
