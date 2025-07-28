@@ -146,7 +146,6 @@ using val_layout_load_B = decltype(make_layout(shape_div(typename traits_load_B:
 using Copy_B = decltype(make_tiled_copy(atom_load_B{}, Layout<CopyThreadShape>{}, val_layout_load_B{}));
 
 using GmemTiledCopyScale = XE_2D_U16x1x32_LD_N; //XE_2D_U16x1x16_LD_N; 
-//using GmemTiledCopyScale = XE_2D_U16x1x16_LD_N; 
 static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 using StrideScale = cute::Stride<_1, int64_t, int64_t>; //dynamic stride
 using traits_load_scale = Copy_Traits<GmemTiledCopyScale, StrideScale>;
@@ -245,7 +244,7 @@ public:
     int scale_number = decltype(size(tCrS_input))::value;
     for(int i=0; i<scale_number; i++){
       auto s_value = tCrS_input(i);
-      if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, s_value);
+      if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, static_cast<float>(s_value));
     }
 #else    
     static constexpr auto N = decltype(size<1>(in))::value;
@@ -297,6 +296,21 @@ public:
     int N = params.n;
     int K = params.k;
     int L = 1;
+
+const int BLK_M = 16;
+const int BLK_N = 64;
+const int BLK_K = 64;
+
+const int ATOM_M = 1;
+const int ATOM_N = 2;
+const int ATOM_K = 1;
+
+const int SG_M = ceil_div(BLK_M, ATOM_M);
+const int SG_N = ceil_div(BLK_N, ATOM_N);
+const int SG_K = ceil_div(BLK_K, ATOM_K);
+
+const int Num_SGs = ATOM_N * ATOM_M * ATOM_K;
+static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 
     T* A = params.A;
     uint8_t* B = params.B;
@@ -383,9 +397,8 @@ public:
 
 	  Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
 
-    const int SubgroupSize = 16;
-    const int SG_QNT_WIDTH = 32;
-    static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / SubgroupSize;
+    //const int SubgroupSize = 16;
+    static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize; //SubgroupSize;
     static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
     using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>;
     Tensor fragment_scale = make_tensor<ElementScale>(FragScaleLayout{});
@@ -405,7 +418,6 @@ public:
     Tensor tBgB = thr_copy_B.retile_S(tCgB);
 
 //// Prepare for prefetch
-    const int BLK_K = 64;
     auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(tiled_copy_a);;
     auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(tiled_copy_b);;
     auto thr_prefetch_A = tiled_prefetch_a.get_slice(thread_idx);
@@ -416,21 +428,22 @@ public:
     auto pBgB = thr_prefetch_B.partition_S(gB);
 	
 // Run mainloop
-    const int BLK_N = 64; 
-    const int ATOM_N = 2;
-    const int SG_N = 32;
-    auto [m_idx, n_idx, k_idx, l_idx] = blk_coord_mnkl;
-    const int n_coord_s = n_idx * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
-    const int l_coord_s = l_idx;
+    //auto [m_idx, n_idx, k_idx, l_idx] = blk_coord_mnkl;
+    //const int n_coord_s = n_idx * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
+    //const int l_coord_s = l_idx;
 
-    if(cute::thread0()) printf("get_sub_group_id() = %d, m_idx = %d, n_idx = %d, k_idx = %d, l_idx = %d, n_coord_s = %d, l_coord_s = %d\n",get_sub_group_id(), m_idx, n_idx, k_idx, l_idx, n_coord_s, l_coord_s);
+    //if(cute::thread0()) printf("get_sub_group_id() = %d, m_idx = %d, n_idx = %d, k_idx = %d, l_idx = %d, n_coord_s = %d, l_coord_s = %d\n",get_sub_group_id(), m_idx, n_idx, k_idx, l_idx, n_coord_s, l_coord_s);
 
     auto copy_iter_s = [&](){
-        return make_tensor(make_inttuple_iter(make_coord(n_coord_s, 0, l_coord_s)),
+        return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)),
                           make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, _1{}, k_tile_count),
                                       make_stride(E<0>{} * _16{}, E<0>{} * decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value, _0{}, E<1>{} * _1{})));
       
     }();
+
+    //using ExpectedLayout = typename decltype(tiled_copy_scale)::TiledLayout::dst_layout; //decltype(tiled_copy_scale.dst_layout()); //decltype(tiled_copy_scale.atom_layout_dst());
+    //static_assert(is_same<decltype(frag_copy_Scale.layout()), ExpectedLayout>::value, "布局不匹配");
+
 #if 1
   #define PRINT(x) print(#x ": "); print(x); print("\n");
     if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
@@ -450,7 +463,8 @@ public:
         print("  dequant_frag : "); print(dequant_frag); print("\n");
 
         print("=====================  D :\n");
-        print("  frag_copy_ScaleB : "); print(frag_copy_Scale); print("\n");
+        print("  tiled_copy_scale : "); print(tiled_copy_scale); print("\n");
+        print("  frag_copy_Scale : "); print(frag_copy_Scale); print("\n");
         print("  copy_iter_s: "); print(copy_iter_s); print("\n");
 
         print("=====================  D :\n");
@@ -484,6 +498,7 @@ public:
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
 
       const int k_reload_factor = ceil_div(params.group_size, BLK_K);
+      //const int k_reload_factor = params.group_size / BLK_K;
 
       if(cute::thread0()) printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %d\n",params.group_size, BLK_K, k_reload_factor);
 
@@ -575,6 +590,26 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
 //  T* absmax = (T*)absmax_;
 //  T* absmax = (T*)absmax_;
 
+//std::vector<T> host_data(n * k / blocksize);
+#if 0
+int element_size_A = m * k;
+auto scale_host_A = sycl::aligned_alloc_host<T>(512, element_size_A, q);
+q.memcpy(scale_host_A, A, element_size_A * sizeof(T)).wait();
+for (int i = 0; i < element_size_A; ++i) {
+    //std::cout << scale_host[i] << " ";
+    printf("%f  ",static_cast<float>(scale_host_A[i]));
+}
+std::cout << std::endl;
+
+int element_size = n * k / blocksize;
+auto scale_host = sycl::aligned_alloc_host<T>(512, element_size, q);
+q.memcpy(scale_host, absmax_, element_size * sizeof(T)).wait();
+for (int i = 0; i < element_size; ++i) {
+    //std::cout << scale_host[i] << " ";
+    printf("%f  ",static_cast<float>(scale_host[i]));
+}
+std::cout << std::endl;
+#endif
 #if 1
   // Init Params 
   using Params = GemmKernel::Params;

@@ -84,7 +84,7 @@ def _gemv_4bit_impl(
     ldb = ct.c_int32((A.shape[-1] + 1) // 2)
     ldc = m
 
-    absmax = absmax * 10
+    #absmax = absmax * 10
     pdb.set_trace()
 
     stream = _get_tensor_stream(A)
