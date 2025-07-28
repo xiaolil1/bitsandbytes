@@ -89,7 +89,7 @@ class TestXPU:
         ##pdb.set_trace()
         C3 = torch.matmul(A, B.t())
         #pdb.set_trace()
-        C2 = F.gemv_4bit(A, qB.t(), state=state)
+        C2 = F.gemv_4bit(A, qB, state=state)
         #pdb.set_trace()
         print("C3.sum() = ", C3.sum())
         print("C2.sum() = ", C2.sum())

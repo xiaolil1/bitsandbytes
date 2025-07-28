@@ -59,9 +59,8 @@ using ElementOutput = float;
 using ProblemShape = Shape<int, int, int, int>;
 
 using TileShape = Shape<_16, _64, _64>;
-using TileShape_half = Shape<_16, _64, _32>;
 using TiledMma =
-      typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32F16F16F32_TT>, Layout<TileShape>,
+      typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                     Layout<Shape<_1, _2, _1>, Stride<_2, _1, _0>>>::TiledMMA;
 
 using WorkgroupTileShape = TileShape;
@@ -237,9 +236,10 @@ public:
       uint8_t value = in[i].get();
       out[i] = static_cast<DstType>(quant_map[value]);
       int thread_idx = int(ThreadIdxX());
-      //if(thread_idx == 0)
-      if(syclcompat::global_id::x() == 2 && syclcompat::global_id::y() ==0 && syclcompat::global_id::z() ==0 )
-      printf("thread_idx = %d, i = %d, value_bit = %x, value = %d, quant_map[value] = %f, out[i] = %f\n",thread_idx, i, value, static_cast<int>(value), quant_map[value], static_cast<float>(out[i]));
+      if(cute::thread0()){
+      //if(syclcompat::global_id::x() == 2 && syclcompat::global_id::y() ==0 && syclcompat::global_id::z() ==0 )
+        //printf("syclcompat::global_id::x() = %d, syclcompat::global_id::y() = %d, syclcompat::global_id::z() = %d, thread_idx = %d, i = %d, in[i].ptr_ = %x, in[i].idx_=%x, value_bit = %x, value = %d, quant_map[value] = %f, out[i] = %f\n",syclcompat::global_id::x(), syclcompat::global_id::y(), syclcompat::global_id::z(), thread_idx, i, in[i].ptr_, in[i].idx_, value, static_cast<int>(value), quant_map[value], static_cast<float>(out[i]));
+      }
     }
 #else    
     static constexpr auto N = decltype(size<1>(in))::value;
@@ -419,7 +419,7 @@ if(cute::thread0())
 //                                      make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename GmemTiledCopyScale::BlockShape{}), _0{}, E<1>{} * _1{})));
 //      
 //    }();
-#if 0
+#if 1
   #define PRINT(x) print(#x ": "); print(x); print("\n");
     if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
         print("======================= A: \n");
@@ -436,6 +436,9 @@ if(cute::thread0())
         print("  mma_B : "); print(mma_B); print("\n");
         print("  frag_copy_B : "); print(frag_copy_B); print("\n");
         print("  dequant_frag : "); print(dequant_frag); print("\n");
+
+        print("=====================  D :\n");
+        print("  accumulators : "); print(accumulators); print("\n");
 
         print("=====================  Config: \n");
         print("  threads per workgroup : "); print(MaxThreadsPerBlock);  print("\n");
@@ -456,7 +459,7 @@ if(cute::thread0())
       prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
       prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
-
+    //k_tile_count=1;
     for (int k_tile = k_start_idx; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++) {
       barrier_arrive(2);
 
@@ -477,39 +480,55 @@ if(cute::thread0())
 
       dequant(dequant_frag, mma_B, /*fragment_scale,*/ quant_map);
 
+      //barrier_wait(1);
+
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
-
-//// 在调用gemm前后添加打印逻辑
-//auto debug_print = [&](const char* name, auto& tensor) {
-//    if (thread_idx == 0) {
-//        printf("----- %s -----\n", name);
-//        for (int i = 0; i < size<0>(tensor); ++i) {
-//            for (int j = 0; j < size<1>(tensor); ++j) {
-//                printf("%6.2f ", static_cast<float>(tensor(i, j)));
-//            }
-//            printf("\n");
-//        }
-//    }
-//    barrier_wait(2);
-//};
-//
-//// 打印输入
-//debug_print("Input A (mma_A)", mma_A);
-//debug_print("Input B (mma_B)", mma_B);
-//debug_print("Accumulators (Before GEMM)", accumulators);
-//
-//// 执行GEMM
-//cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
-//
-//// 打印输出
-//debug_print("Accumulators (After GEMM)", accumulators);
-
       barrier_wait(2);
+#if 0
+// 在调用gemm前后添加打印逻辑
+auto debug_print = [&](const char* name, auto& tensor) {
+    int numbers = decltype(size(tensor))::value;
+    printf("\n----- %s ----- numbers = %d\n", name, numbers);
+    for (int i = 0; i < numbers; ++i) {
+        printf("%s[%d] = %6.2f\n", name, i , static_cast<float>(tensor[i]));
+    }
+    printf("\n\n");
+    barrier_wait(1);
+};
+
+if (cute::thread0()) {
+// 打印输入
+debug_print("Input A (mma_A)", mma_A);
+    barrier_wait(1);
+debug_print("Input B (mma_B)", mma_B);
+    barrier_wait(1);
+debug_print("Accumulators (Before GEMM)", accumulators);
+    barrier_wait(1);
+}
+// 执行GEMM
+cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
+
+if (cute::thread0()) {
+// 打印输出
+debug_print("Accumulators (After GEMM)", accumulators);
+
+barrier_wait(2);
+}
+#endif
+#if 0
+cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
+barrier_wait(2);
+
+for (int i = 0; i < accumulators.size(); ++i) {
+    printf("Thread (%d, %d): accumulators[%d] =%f\n", syclcompat::global_id::x() , syclcompat::global_id::y(), i, static_cast<float>(accumulators[i]));
+}
+printf("\n");
+#endif
     }
 	
     SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>((char*)nullptr);
     CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
-    auto problem_shape_MNKL = problem_size; //append<4>(problem_size, 1);
+    auto problem_shape_MNKL = append<4>(problem_size, 1);
     epilogue(
       problem_shape_MNKL,
       subgroup_tile_shape,
@@ -573,7 +592,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   //int k_half = k/2;
   //StrideB stride_B = make_stride(int64_t{1}, int64_t{n}, int64_t{n * k}); 
   StrideB stride_B = make_stride(int64_t{n}, cute::Int<1>{}, int64_t{0}); 
-  auto mB_nkl = make_tensor(cute::subbyte_iterator<uint4_t>(B), make_layout(make_shape(n, k, l), stride_B));
+  auto mB_nkl = make_tensor(cute::subbyte_iterator<ElementB>(B), make_layout(make_shape(n, k, l), stride_B));
   Copy_B tiled_copy_b{Copy_B{}.with(mB_nkl)};
 
   #define PRINT(x) print(#x ": "); print(x); print("\n");

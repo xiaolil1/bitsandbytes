@@ -84,6 +84,7 @@ private:
 
   friend struct subbyte_iterator<T>;
 
+public:
   // Pointer to storage element
   storage_type* ptr_ = nullptr;
 
@@ -262,6 +263,8 @@ public:
     k = sizeof_bits_v<value_type> * k + idx_;
     ptr_ += k / sizeof_bits_v<storage_type>;
     idx_  = k % sizeof_bits_v<storage_type>;
+    if(idx_ == 4)
+    //printf("k = %d, ptr_ = %x, idx_ = %d\n", k, ptr_, idx_);
     return *this;
   }
 
