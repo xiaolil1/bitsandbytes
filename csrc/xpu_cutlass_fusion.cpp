@@ -243,8 +243,8 @@ public:
       }
       int scale_number = decltype(size(tCrS_input))::value;
       for(int i=0; i<scale_number; i++){
-        auto s_value = tCrS_input[i];
-        if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, static_cast<float>(s_value));
+        auto s_value = tCrS_input(i);
+        if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, s_value);
       }
     }
 #else    
@@ -609,7 +609,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   auto mScale = make_tensor(
         make_gmem_ptr(reinterpret_cast<ElementScale *>(absmax_)),
         make_layout(make_shape(n, scale_k, l), stride_S));
-  Copy_Scale tiled_copy_scale = {Copy_Scale{}.with(mScale)};
+  Copy_Scale tiled_copy_scale{Copy_Scale{}.with(mScale)};
 
   params.tiled_copy_scale = tiled_copy_scale;
 
