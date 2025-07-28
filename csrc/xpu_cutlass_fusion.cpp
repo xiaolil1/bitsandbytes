@@ -145,10 +145,16 @@ using atom_load_B = Copy_Atom<traits_load_B, ElementB>;
 using val_layout_load_B = decltype(make_layout(shape_div(typename traits_load_B::BlockShape{}, CopyThreadShape{})));
 using Copy_B = decltype(make_tiled_copy(atom_load_B{}, Layout<CopyThreadShape>{}, val_layout_load_B{}));
 
-using GmemTiledCopyScale = XE_2D_U16x1x32_LD_N; //XE_2D_U16x1x16_LD_N; 
-static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
+//using GmemTiledCopyScale = XE_2D_U16x1x32_LD_N;
+using GmemTiledCopyScale = XE_2D_U16x1x16_LD_N; 
 using StrideScale = cute::Stride<_1, int64_t, int64_t>; //dynamic stride
 using traits_load_scale = Copy_Traits<GmemTiledCopyScale, StrideScale>;
+//using AtomLayout = Layout<
+//    Shape<_16, _2>,     // 匹配 XE_2D_U16x1x32_LD_N 的 BlockShape
+//    Stride<_1, _16>     // 连续存储，步长 16
+//>;
+//using atom_load_scale = Copy_Atom<traits_load_scale, ElementScale, AtomLayout>;
+//using Copy_Scale = decltype(make_tiled_copy(atom_load_scale{}, Layout<CopyThreadShapeRev>{}, AtomLayout{})); //group-wise scale
 using atom_load_scale = Copy_Atom<traits_load_scale, ElementScale>;
 using val_layout_load_scale = decltype(make_layout(shape_div(typename traits_load_scale::BlockShape{}, CopyThreadShapeRev{}))); 
 using Copy_Scale = decltype(make_tiled_copy(atom_load_scale{}, Layout<CopyThreadShapeRev>{}, val_layout_load_scale{})); //group-wise scale
@@ -228,7 +234,7 @@ public:
     using SrcType = typename EngineIn::value_type;
     using DstType = typename EngineOut::value_type;
     using ScaleType = typename EngineScales::value_type;
-#if 1
+#if 0
     int numbers = decltype(size(in))::value;
     for(int i=0; i<numbers; i++){
       //auto in_ptr_8 = (uint8_t*)(raw_pointer_cast(in.data()));
@@ -281,7 +287,7 @@ public:
         for (int i = 0; i < vec_size; i++) {
           uint8_t value = (format_data >> (src_bits * i)) & 0xf;
           dst[i] = static_cast<DstType>(quant_map[value] * static_cast<float>(ts));          
-          if(cute::thread0()) printf("n = %d, s = %d, i = %d, src = %d, quant_map[value] = %f, ts = %f, dst = %f\n", n, s, i, static_cast<int>(value), quant_map[value], static_cast<float>(ts), static_cast<float>(dst[i]));
+          //if(cute::thread0()) printf("n = %d, s = %d, i = %d, src = %d, quant_map[value] = %f, ts = %f, dst = %f\n", n, s, i, static_cast<int>(value), quant_map[value], static_cast<float>(ts), static_cast<float>(dst[i]));
         }
       }
     }
@@ -401,6 +407,7 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
     static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize; //SubgroupSize;
     static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
     using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>;
+    //using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>, Stride<_1,_1,_0>>;
     Tensor fragment_scale = make_tensor<ElementScale>(FragScaleLayout{});
     if(cute::thread0()) printf("scale_traits_size = %d, scale_traits_num = %d, SG_QNT_WIDTH = %d, BlockShape = %d, BlockShape_1= %d\n", scale_traits_size, scale_traits_num, SG_QNT_WIDTH, decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value, decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value);
     
@@ -412,7 +419,16 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
     Tensor frag_copy_A = thr_copy_A.retile_D(mma_A);
     Tensor frag_copy_B = thr_copy_B.retile_D(dequant_frag);
     Tensor frag_copy_Scale = thr_copy_scale.retile_D(fragment_scale);
-    
+    //auto frag_layout = make_layout(
+    //  make_shape(_2{}, _1{}, _1{}),   // 形状 (_2, _1, _1)
+    //  make_stride(_1{}, _1{}, _0{})   // 步长 (_1, _1, _0)
+    //);
+    //Tensor frag_copy_Scale = thr_copy_scale.retile_D(make_tensor(fragment_scale.data(), frag_layout));
+   
+    //using FragLayout = Layout<Shape<_2,_1,_1>, Stride<_1,_1,_0>>;
+    //Tensor fragment_scale = make_tensor<ElementScale>(FragLayout{});
+    //Tensor frag_copy_Scale = thr_copy_scale.retile_D(fragment_scale);
+
 //// Retile global counting tensors for copies: 
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
     Tensor tBgB = thr_copy_B.retile_S(tCgB);
@@ -441,8 +457,11 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
       
     }();
 
-    //using ExpectedLayout = typename decltype(tiled_copy_scale)::TiledLayout::dst_layout; //decltype(tiled_copy_scale.dst_layout()); //decltype(tiled_copy_scale.atom_layout_dst());
-    //static_assert(is_same<decltype(frag_copy_Scale.layout()), ExpectedLayout>::value, "布局不匹配");
+    //auto copy_iter_s = [&](){
+    //  return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)),
+    //           make_layout(make_shape(Int<decltype(size<0>(typename GmemTiledCopyScale::BlockShape{}))::value>{}, Int<decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value>{}, _1{}, k_tile_count),
+    //               make_stride(_16{}, _32{}, _0{}, _1{})));
+    //}();
 
 #if 1
   #define PRINT(x) print(#x ": "); print(x); print("\n");
@@ -464,6 +483,7 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 
         print("=====================  D :\n");
         print("  tiled_copy_scale : "); print(tiled_copy_scale); print("\n");
+        print("  fragment_scale : "); print(fragment_scale); print("\n");
         print("  frag_copy_Scale : "); print(frag_copy_Scale); print("\n");
         print("  copy_iter_s: "); print(copy_iter_s); print("\n");
 
@@ -638,7 +658,6 @@ std::cout << std::endl;
   const int scale_k = cute::ceil_div(k, blocksize);
   StrideScale stride_S = cutlass::make_cute_packed_stride(StrideScale{}, cute::make_shape(n, scale_k, l));
   std::cout<<"n = "<<n<<" k = "<<k<<" blocksize = "<<blocksize<<" scale_k = "<<scale_k<<std::endl;
-
   auto mScale = make_tensor(
         make_gmem_ptr(absmax_),
         make_layout(make_shape(n, scale_k, l), stride_S));
