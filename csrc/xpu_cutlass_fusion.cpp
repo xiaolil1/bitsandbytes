@@ -145,8 +145,8 @@ using atom_load_B = Copy_Atom<traits_load_B, ElementB>;
 using val_layout_load_B = decltype(make_layout(shape_div(typename traits_load_B::BlockShape{}, CopyThreadShape{})));
 using Copy_B = decltype(make_tiled_copy(atom_load_B{}, Layout<CopyThreadShape>{}, val_layout_load_B{}));
 
-//using GmemTiledCopyScale = XE_2D_U16x1x32_LD_N; //XE_2D_U16x1x16_LD_N; 
-using GmemTiledCopyScale = XE_2D_U16x1x16_LD_N; 
+using GmemTiledCopyScale = XE_2D_U16x1x32_LD_N; //XE_2D_U16x1x16_LD_N; 
+//using GmemTiledCopyScale = XE_2D_U16x1x16_LD_N; 
 static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 using StrideScale = cute::Stride<_1, int64_t, int64_t>; //dynamic stride
 using traits_load_scale = Copy_Traits<GmemTiledCopyScale, StrideScale>;
@@ -241,11 +241,11 @@ public:
       //if(syclcompat::global_id::x() == 2 && syclcompat::global_id::y() ==0 && syclcompat::global_id::z() ==0 )
         //printf("syclcompat::global_id::x() = %d, syclcompat::global_id::y() = %d, syclcompat::global_id::z() = %d, thread_idx = %d, i = %d, in[i].ptr_ = %x, in[i].idx_=%x, value_bit = %x, value = %d, quant_map[value] = %f, out[i] = %f\n",syclcompat::global_id::x(), syclcompat::global_id::y(), syclcompat::global_id::z(), thread_idx, i, in[i].ptr_, in[i].idx_, value, static_cast<int>(value), quant_map[value], static_cast<float>(out[i]));
       }
-      int scale_number = decltype(size(tCrS_input))::value;
-      for(int i=0; i<scale_number; i++){
-        auto s_value = tCrS_input(i);
-        if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, s_value);
-      }
+    }
+    int scale_number = decltype(size(tCrS_input))::value;
+    for(int i=0; i<scale_number; i++){
+      auto s_value = tCrS_input(i);
+      if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, s_value);
     }
 #else    
     static constexpr auto N = decltype(size<1>(in))::value;
@@ -382,12 +382,14 @@ public:
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b, tCgB(_,_,_,0).shape()));
 
 	  Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
-	
+
+    const int SubgroupSize = 16;
+    const int SG_QNT_WIDTH = 32;
     static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / SubgroupSize;
-    static constexpr auto scale_traits_num = SG_QNT_WIDTH / size<1>(typename GmemTiledCopyScale::BlockShape{});
+    static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
     using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>;
     Tensor fragment_scale = make_tensor<ElementScale>(FragScaleLayout{});
-    if(cute::thread0()) printf("scale_traits_size = %d, scale_traits_num = %d, SG_QNT_WIDTH = %d\n", scale_traits_size, scale_traits_num, SG_QNT_WIDTH);
+    if(cute::thread0()) printf("scale_traits_size = %d, scale_traits_num = %d, SG_QNT_WIDTH = %d, BlockShape = %d, BlockShape_1= %d\n", scale_traits_size, scale_traits_num, SG_QNT_WIDTH, decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value, decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value);
     
     static_assert(std::is_same_v<typename decltype(dequant_frag)::value_type, ElementQuant>);
     static_assert(std::is_same_v<typename decltype(mma_A)::value_type, ElementMMA>);
@@ -403,6 +405,7 @@ public:
     Tensor tBgB = thr_copy_B.retile_S(tCgB);
 
 //// Prepare for prefetch
+    const int BLK_K = 64;
     auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(tiled_copy_a);;
     auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(tiled_copy_b);;
     auto thr_prefetch_A = tiled_prefetch_a.get_slice(thread_idx);
@@ -413,22 +416,25 @@ public:
     auto pBgB = thr_prefetch_B.partition_S(gB);
 	
 // Run mainloop
+    const int BLK_N = 64; 
+    const int ATOM_N = 2;
+    const int SG_N = 32;
     auto [m_idx, n_idx, k_idx, l_idx] = blk_coord_mnkl;
     const int n_coord_s = n_idx * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
     const int l_coord_s = l_idx;
 
-    if(cute::thread0()) printf("m_idx = %d, n_idx = %d, k_idx = %d, l_idx = %d, n_coord_s = %d, l_coord_s = %d\n",m_idx, n_idx, k_idx, l_idx, n_coord_s, l_coord_s);
+    if(cute::thread0()) printf("get_sub_group_id() = %d, m_idx = %d, n_idx = %d, k_idx = %d, l_idx = %d, n_coord_s = %d, l_coord_s = %d\n",get_sub_group_id(), m_idx, n_idx, k_idx, l_idx, n_coord_s, l_coord_s);
 
     auto copy_iter_s = [&](){
         return make_tensor(make_inttuple_iter(make_coord(n_coord_s, 0, l_coord_s)),
                           make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, _1{}, k_tile_count),
-                                      make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename GmemTiledCopyScale::BlockShape{}), _0{}, E<1>{} * _1{})));
+                                      make_stride(E<0>{} * _16{}, E<0>{} * decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value, _0{}, E<1>{} * _1{})));
       
     }();
 #if 1
   #define PRINT(x) print(#x ": "); print(x); print("\n");
     if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
-        print("======================= A: \n");
+        print("\n\n======================= A: \n");
         print("  gA   : "); print(gA);   print("\n");
         print("  tCgA : "); print(tCgA); print("\n");
         print("  tAgA : "); print(tAgA); print("\n");
@@ -457,7 +463,7 @@ public:
         print("  tiled_prefetch_a :    "); print(tiled_prefetch_a); print("\n");
         print("  tiled_prefetch_b :    "); print(tiled_prefetch_b); print("\n");
         print("  pAgA :    "); print(pAgA); print("\n");
-        print("  pBgB :    "); print(pBgB); print("\n");
+        print("  pBgB :    "); print(pBgB); print("\n\n\n");
       }
   #undef PRINT
 #endif  
@@ -477,7 +483,7 @@ public:
       copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
 
-      const int k_reload_factor = params.group_size / BLK_K;
+      const int k_reload_factor = ceil_div(params.group_size, BLK_K);
 
       if(cute::thread0()) printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %d\n",params.group_size, BLK_K, k_reload_factor);
 
@@ -591,14 +597,6 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   auto mB_nkl = make_tensor(cute::subbyte_iterator<ElementB>(B), make_layout(make_shape(n, k, l), stride_B));
   Copy_B tiled_copy_b{Copy_B{}.with(mB_nkl)};
 
-  #define PRINT(x) print(#x ": "); print(x); print("\n");
-    if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
-        print("=====================  B :\n");
-        print("  stride_B : ");   print(stride_B);   print("\n");
-        print("=====================  B :\n");
-      }
-  #undef PRINT
-
   params.tiled_copy_a = tiled_copy_a;
   params.tiled_copy_b = tiled_copy_b;
 
@@ -607,11 +605,20 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   std::cout<<"n = "<<n<<" k = "<<k<<" blocksize = "<<blocksize<<" scale_k = "<<scale_k<<std::endl;
 
   auto mScale = make_tensor(
-        make_gmem_ptr(reinterpret_cast<ElementScale *>(absmax_)),
+        make_gmem_ptr(absmax_),
         make_layout(make_shape(n, scale_k, l), stride_S));
   Copy_Scale tiled_copy_scale{Copy_Scale{}.with(mScale)};
 
   params.tiled_copy_scale = tiled_copy_scale;
+
+  #define PRINT(x) print(#x ": "); print(x); print("\n");
+    if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
+        print("=====================  B :\n");
+        print("  stride_B : ");   print(stride_B);   print("\n");
+        print("  stride_S : ");   print(stride_S);   print("\n");
+        print("=====================  B :\n");
+      }
+  #undef PRINT
 
   cutlass::KernelHardwareInfo hw_info;
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
