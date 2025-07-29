@@ -74,9 +74,9 @@ def _gemv_4bit_impl(
     blocksize: int,
     out: torch.Tensor,
 ) -> None:
-    #import pdb
-    #pdb.set_trace()
-    m = ct.c_int32(*A.shape[:-1])
+    import pdb
+    pdb.set_trace()
+    m = ct.c_int32(*A.shape[:-1]) #A.shape[1])
     n = ct.c_int32(shapeB[0])
     k = ct.c_int32(shapeB[1])
 
@@ -86,8 +86,8 @@ def _gemv_4bit_impl(
 
     #absmax = absmax * 10
     #pdb.set_trace()
-    print("A before kernel: ", A)
-    print("B before kernel: ", B)
+    #print("A before kernel: ", A)
+    #print("B before kernel: ", B)
     stream = _get_tensor_stream(A)
     if A.dtype == torch.float16:
         lib.cgemv_4bit_inference_fp16(

@@ -40,7 +40,7 @@ class TestXPU:
     @pytest.mark.parametrize("device", ["xpu"])#get_available_devices())
     @pytest.mark.parametrize("double_quant", [True], ids=lambda double_quant: f"DQ_{double_quant}")
     @pytest.mark.parametrize("storage_type", ["nf4"])
-    @pytest.mark.parametrize("kind", ["fc0"])#, "attn_packed"])
+    @pytest.mark.parametrize("kind", ["fc1"])#, "attn_packed"])
     @pytest.mark.parametrize("dtype", [torch.bfloat16], ids=describe_dtype)
     @pytest.mark.parametrize(
         "quant_storage",
@@ -83,10 +83,10 @@ class TestXPU:
             double_quant=False
             block_size = 16
         elif kind == "fc1":
-            dim=256
-            A = torch.randn(32, dim, dtype=dtype, device=device) * 10
+            dim=4096
+            A = torch.randn(64, dim, dtype=dtype, device=device)
             #A = torch.arange(1, 32 * 256 + 1).reshape(32, 256).bfloat16().xpu()
-            B = torch.randn(dim, dim, dtype=dtype, device=device) # / math.sqrt(dim)
+            B = torch.randn(dim , dim, dtype=dtype, device=device)  / math.sqrt(dim)
             double_quant=False
             block_size = 32
         elif kind == "fc2":
@@ -133,18 +133,18 @@ class TestXPU:
           #C1 = bnb.matmul_4bit(A, qB.t(), state)          
         else:
           pdb.set_trace()
-          print("")
-          print("absmax = ", state.absmax)
-          print("A[0] = ",A[0])
-          print("B[0] = ",B[0])
+          #print("")
+          #print("absmax = ", state.absmax)
+          #print("A[0] = ",A[0])
+          #print("B[0] = ",B[0])
           C3 = torch.matmul(A, B.t())
           #pdb.set_trace()
           C2 = F.gemv_4bit(A, qB.t(), state=state)
-          #pdb.set_trace()
-          print("C3.sum() = ", C3.sum())
-          print("C2.sum() = ", C2.sum())
-          diff = abs(C2-C3)
-          print("diff = ", diff.sum())
+          pdb.set_trace()
+          #print("C3.sum() = ", C3.sum())
+          #print("C2.sum() = ", C2.sum())
+          diff = abs(C2-C3.bfloat16())
+          print("diff = ", diff[0])
           print(C3[0])
           print(C2[0])
           #print(C3)

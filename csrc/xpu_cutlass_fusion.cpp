@@ -176,7 +176,6 @@ public:
     T* A;
     uint8_t* B;
     float* out;
-    //T *absmax;
     float *datatype; //LUT
     int group_size;
 	  
@@ -206,11 +205,6 @@ public:
     }
   }
 
-/*float bfloat16_to_float(uint16_t bf16_bits) {
-    uint32_t float_bits = (bf16_bits << 16);  // 将 bfloat16 左移16位转为 float
-    return reinterpret_cast<float&>(float_bits);
-}*/
-
    /// Utilities to transform A.
   template <class EngineIn,
             class EngineOut, 
@@ -233,31 +227,7 @@ public:
     using SrcType = typename EngineIn::value_type;
     using DstType = typename EngineOut::value_type;
     using ScaleType = typename EngineScales::value_type;
-#if 0
-    static constexpr auto N = decltype(size<1>(in))::value;
-    static constexpr auto loop_cnt = decltype(size(out))::value / N;
-    for (int n = 0; n < N; n++) {
-      auto s_value = tCrS_input(i);
-      for (int l = 0; s < loop_cnt; l++) {
-      
-//      int numbers = decltype(size(in))::value;
-//      for(int i=0; i<numbers / N; i++){
-//        //auto in_ptr_8 = (uint8_t*)(raw_pointer_cast(in.data()));
-//        //out[i] = static_cast<DstType>(quant_map[in_ptr_8[i].data()]);
-//        uint8_t value = in[i].get();
-//        out[i] = static_cast<DstType>(quant_map[value]);
-//        int thread_idx = int(ThreadIdxX());
-//        if(cute::thread0()){
-//        //if(syclcompat::global_id::x() == 2 && syclcompat::global_id::y() ==0 && syclcompat::global_id::z() ==0 )
-//          //printf("syclcompat::global_id::x() = %d, syclcompat::global_id::y() = %d, syclcompat::global_id::z() = %d, thread_idx = %d, i = %d, in[i].ptr_ = %x, in[i].idx_=%x, value_bit = %x, value = %d, quant_map[value] = %f, out[i] = %f\n",syclcompat::global_id::x(), syclcompat::global_id::y(), syclcompat::global_id::z(), thread_idx, i, in[i].ptr_, in[i].idx_, value, static_cast<int>(value), quant_map[value], static_cast<float>(out[i]));
-//        }
-//      }
-//    int scale_number = decltype(size(tCrS_input))::value;
-//    for(int i=0; i<scale_number; i++){
-//      auto s_value = tCrS_input(i);
-//      if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, static_cast<float>(s_value));
-//    }
-#else    
+
     static constexpr auto N = decltype(size<1>(in))::value;
 
     using format_type = ushort; //16
@@ -274,13 +244,6 @@ public:
     // reshape tensors for easy access
     auto s_tensor = make_tensor((format_type*)(raw_pointer_cast(in.data())), Shape<Int<loop_cnt / scalar>, Int<N>>{});
     auto d_tensor = make_tensor(out.data(), Shape<Int<vec_size>, Int<splits>, Int<N>>{});
-
-int scale_number = decltype(size(tCrS_input))::value;
-for(int i=0; i<scale_number; i++){
-  auto s_value = tCrS_input(i);
-  if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, static_cast<float>(s_value));
-}
-//  printf("thread_idx = %d, decltype(size(in))::value = %d, K = %d, N = %d, L = %d, src_bits = %d, sizeof_bits_v<format_type> = %d, scalar = %d, decltype(size(out))::value = %d, loop_cnt = %d, splits = %d\n",int(ThreadIdxX()), decltype(size(in))::value, decltype(size<0>(in))::value, N, decltype(size<2>(in))::value, src_bits, sizeof_bits_v<format_type>, scalar, decltype(size(out))::value, loop_cnt, splits);
 
     for (int n = 0; n < N; n++) {
       const auto ts = tCrS_input(n);
@@ -300,37 +263,34 @@ for(int i=0; i<scale_number; i++){
           } else {
             dst[i+1] = static_cast<DstType>(quant_map[value] * static_cast<float>(ts));          
           }
-          if(cute::thread0())
-            printf("tid = %d, n = %d, s = %d, i = %d, format_data = %d, value = %d, quant_map[value] = %f, ts = %f, dst = %f\n",ThreadIdxX(), n, s, i, static_cast<int>(format_data), static_cast<int>(value), quant_map[value], static_cast<float>(ts), static_cast<float>(dst[i]));
         }
       }
     }
-#endif    
   }
   
   CUTLASS_DEVICE
   void operator()(Params const& params, char* smem_buf) {
-    if(cute::thread0()) printf("this is fusion kernel...........\n"); 
+    //if(cute::thread0()) printf("this is fusion kernel...........\n"); 
 
     int M = params.m;
     int N = params.n;
     int K = params.k;
     int L = 1;
 
-const int BLK_M = 256;
-const int BLK_N = 256;
-const int BLK_K = 32;
-
-const int ATOM_M = 8;
-const int ATOM_N = 4;
-const int ATOM_K = 1;
-
-const int SG_M = ceil_div(BLK_M, ATOM_M);
-const int SG_N = ceil_div(BLK_N, ATOM_N);
-const int SG_K = ceil_div(BLK_K, ATOM_K);
-
-const int Num_SGs = ATOM_N * ATOM_M * ATOM_K;
-static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
+    const int BLK_M = 256;
+    const int BLK_N = 256;
+    const int BLK_K = 32;
+    
+    const int ATOM_M = 8;
+    const int ATOM_N = 4;
+    const int ATOM_K = 1;
+    
+    const int SG_M = ceil_div(BLK_M, ATOM_M);
+    const int SG_N = ceil_div(BLK_N, ATOM_N);
+    const int SG_K = ceil_div(BLK_K, ATOM_K);
+    
+    const int Num_SGs = ATOM_N * ATOM_M * ATOM_K;
+    static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 
     T* A = params.A;
     uint8_t* B = params.B;
@@ -363,21 +323,17 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
     auto blk_shape = TileShape{}; //16,64,64
     int m_coord, n_coord, l_coord; //block index
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
-      if(cute::thread0()) printf("AlongN !!\n");
+      //if(cute::thread0()) printf("AlongN !!\n");
       m_coord = BlockIdxY();
       n_coord = BlockIdxX();
       l_coord = BlockIdxZ();
     } else {
-      if(cute::thread0()) printf("not AlongN !!\n");
+      //if(cute::thread0()) printf("not AlongN !!\n");
       m_coord = BlockIdxX();
       n_coord = BlockIdxY();
       l_coord = BlockIdxZ();
     }
     auto blk_coord_mnkl = make_coord(m_coord, n_coord, _, l_coord);
-    if(cute::thread0()) {
-      printf("M = %d, N=%d, K=%d, L=%d\n", M, N, K, L);
-      printf("thread_idx = %d, m_coord = %d, n_coord = %d, l_coord = %d, BlockIdxX() = %d, BlockIdxY() = %d, BlockIdxZ() = %d\n",thread_idx, m_coord, n_coord, l_coord, BlockIdxX(), BlockIdxY(), BlockIdxZ());
-    }
     constexpr auto workgroup_shape = WorkgroupTileShape{}; //256, 256, 32 
     constexpr auto subgroup_tile_shape = SubgroupTileShape{}; //32, 64, 32 (number of atom level workgroup: 256/8=32, 256/4=64, 32/2=32)
   
@@ -395,7 +351,6 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 //// Create K slicing tiling iterator and count
     auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(K)), make_shape(K));
     int k_tile_count = ceil_div(K, get<2>(workgroup_shape)); //inner_loop number
-    if(cute::thread0()) printf("k_tile_count = %d\n", k_tile_count);
 
 
 ////// MainLoop //////
@@ -417,13 +372,10 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 
 	  Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
 
-    //const int SubgroupSize = 16;
     static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize; //SubgroupSize;
     static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
     using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>;
-    //using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>, Stride<_1,_1,_0>>;
     Tensor fragment_scale = make_tensor<ElementScale>(FragScaleLayout{});
-    if(cute::thread0()) printf("scale_traits_size = %d, scale_traits_num = %d, SG_QNT_WIDTH = %d, BlockShape = %d, BlockShape_1= %d\n", scale_traits_size, scale_traits_num, SG_QNT_WIDTH, decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value, decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value);
     
     static_assert(std::is_same_v<typename decltype(dequant_frag)::value_type, ElementQuant>);
     static_assert(std::is_same_v<typename decltype(mma_A)::value_type, ElementMMA>);
@@ -433,15 +385,6 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
     Tensor frag_copy_A = thr_copy_A.retile_D(mma_A);
     Tensor frag_copy_B = thr_copy_B.retile_D(dequant_frag);
     Tensor frag_copy_Scale = thr_copy_scale.retile_D(fragment_scale);
-    //auto frag_layout = make_layout(
-    //  make_shape(_2{}, _1{}, _1{}),   // 形状 (_2, _1, _1)
-    //  make_stride(_1{}, _1{}, _0{})   // 步长 (_1, _1, _0)
-    //);
-    //Tensor frag_copy_Scale = thr_copy_scale.retile_D(make_tensor(fragment_scale.data(), frag_layout));
-   
-    //using FragLayout = Layout<Shape<_2,_1,_1>, Stride<_1,_1,_0>>;
-    //Tensor fragment_scale = make_tensor<ElementScale>(FragLayout{});
-    //Tensor frag_copy_Scale = thr_copy_scale.retile_D(fragment_scale);
 
 //// Retile global counting tensors for copies: 
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
@@ -458,12 +401,6 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
     auto pBgB = thr_prefetch_B.partition_S(gB);
 	
 // Run mainloop
-    //auto [m_idx, n_idx, k_idx, l_idx] = blk_coord_mnkl;
-    //const int n_coord_s = n_idx * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
-    //const int l_coord_s = l_idx;
-
-    //if(cute::thread0()) printf("get_sub_group_id() = %d, m_idx = %d, n_idx = %d, k_idx = %d, l_idx = %d, n_coord_s = %d, l_coord_s = %d\n",get_sub_group_id(), m_idx, n_idx, k_idx, l_idx, n_coord_s, l_coord_s);
-
     auto copy_iter_s = [&](){
         return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)),
                           make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, _1{}, k_tile_count),
@@ -471,13 +408,7 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
       
     }();
 
-    //auto copy_iter_s = [&](){
-    //  return make_tensor(make_inttuple_iter(make_coord(n_coord, 0, l_coord)),
-    //           make_layout(make_shape(Int<decltype(size<0>(typename GmemTiledCopyScale::BlockShape{}))::value>{}, Int<decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value>{}, _1{}, k_tile_count),
-    //               make_stride(_16{}, _32{}, _0{}, _1{})));
-    //}();
-
-#if 1
+#if 0
   #define PRINT(x) print(#x ": "); print(x); print("\n");
     if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
         print("\n\n======================= A: \n");
@@ -518,10 +449,9 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = k_start_idx;
 
-#if 1
     const int k_reload_factor = ceil_div(params.group_size, BLK_K);
-    if(cute::thread0()) printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %f\n",params.group_size, BLK_K, k_reload_factor);
-#endif
+    //if(cute::thread0()) printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %f\n",params.group_size, BLK_K, k_reload_factor);
+
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
       prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
@@ -534,19 +464,11 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
       // Copy gmem to rmem for the first k_tile
       copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
-#if 1
-      const int s_step = k_start_idx + (k_s / k_reload_factor); //1 + k_tile / k_reload_factor;
-      if(cute::thread0()) printf("k_start_idx = %d, k_s = %d, k_reload_factor = %f, s_step = %d\n",k_start_idx, k_s, k_reload_factor, s_step);
+
+      const int s_step = k_start_idx + (k_s / k_reload_factor);
+      //if(cute::thread0()) printf("k_start_idx = %d, k_s = %d, k_reload_factor = %f, s_step = %d\n",k_start_idx, k_s, k_reload_factor, s_step);
       copy(tiled_copy_scale, copy_iter_s(_, _, _, s_step), frag_copy_Scale);
-#else
-      const int k_reload_factor = ceil_div(params.group_size, BLK_K);
-      //const int k_reload_factor = params.group_size / BLK_K;
 
-      //if(cute::thread0())
-        printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %d\n",params.group_size, BLK_K, k_reload_factor);
-
-      copy(tiled_copy_scale, copy_iter_s(_, _, _, k_tile / k_reload_factor), frag_copy_Scale);
-#endif
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
       }
@@ -617,7 +539,7 @@ template <typename T, int BITS>
 void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned char *B,
                          T *absmax_, float *datatype, float *out, int lda,
                          int ldb, int ldc, int blocksize, sycl::queue *stream) {
-  std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!!!!!\n";
+  //std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!!!!!\n";
 
   sycl::queue q = *stream;
   using GemmKernel = kgemm_4bit_inference_cutlass_dequant<T, BITS>;
@@ -625,33 +547,8 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   static constexpr int smem_size= 512; // (16 * 32) for quant_map
   int l = 1;
 
-  //TODO(Xiaoli): FIX ME?? auto problem_size = ProblemShape{m, n, k};
   auto problem_size = ProblemShape{m, n, k, l};
-  //TODO(Xiaoli): FIX ME
-//  T* absmax = (T*)absmax_;
-//  T* absmax = (T*)absmax_;
 
-//std::vector<T> host_data(n * k / blocksize);
-#if 0
-int element_size_A = m * k;
-auto scale_host_A = sycl::aligned_alloc_host<T>(512, element_size_A, q);
-q.memcpy(scale_host_A, A, element_size_A * sizeof(T)).wait();
-for (int i = 0; i < element_size_A; ++i) {
-    //std::cout << scale_host[i] << " ";
-    printf("%f  ",static_cast<float>(scale_host_A[i]));
-}
-std::cout << std::endl;
-
-int element_size = n * k / blocksize;
-auto scale_host = sycl::aligned_alloc_host<T>(512, element_size, q);
-q.memcpy(scale_host, absmax_, element_size * sizeof(T)).wait();
-for (int i = 0; i < element_size; ++i) {
-    //std::cout << scale_host[i] << " ";
-    printf("%f  ",static_cast<float>(scale_host[i]));
-}
-std::cout << std::endl;
-#endif
-#if 1
   // Init Params 
   using Params = GemmKernel::Params;
   Params params;
@@ -678,7 +575,7 @@ std::cout << std::endl;
 
   const int scale_k = cute::ceil_div(k, blocksize);
   StrideScale stride_S = cutlass::make_cute_packed_stride(StrideScale{}, cute::make_shape(n, scale_k, l));
-  std::cout<<"n = "<<n<<" k = "<<k<<" blocksize = "<<blocksize<<" scale_k = "<<scale_k<<std::endl;
+  //std::cout<<"n = "<<n<<" k = "<<k<<" blocksize = "<<blocksize<<" scale_k = "<<scale_k<<std::endl;
   auto mScale = make_tensor(
         make_gmem_ptr(absmax_),
         make_layout(make_shape(n, scale_k, l), stride_S));
@@ -694,6 +591,7 @@ std::cout << std::endl;
   StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(m, n, l));
   StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(m, n, l));
 
+#if 0
   #define PRINT(x) print(#x ": "); print(x); print("\n");
     if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
         print("=====================  stride :\n");
@@ -705,6 +603,7 @@ std::cout << std::endl;
         print("=====================  stride :\n");
       }
   #undef PRINT
+#endif
 
   params.hw_info = hw_info;
   params.epilogue = CollectiveEpilogue::to_underlying_arguments(problem_size, {{alpha, beta}, nullptr, stride_C, out, stride_D}, nullptr);
@@ -721,8 +620,8 @@ std::cout << std::endl;
 
   const syclcompat::dim3 sycl_block(block.x, block.y, block.z); //workgroup_size: 1*2*1*16, 1, 1
   const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);     //workgroup_number (problem_size / tile_size): N/64, M/16, 1
-  printf("Host Grid: (%d, %d, %d)\n", grid.x, grid.y, grid.z);
-  printf("Host Block: (%d, %d, %d)\n", block.x, block.y, block.z);
+  //printf("Host Grid: (%d, %d, %d)\n", grid.x, grid.y, grid.z);
+  //printf("Host Block: (%d, %d, %d)\n", block.x, block.y, block.z);
 
   auto kernel_props = [] {
       return syclcompat::experimental::kernel_properties{
@@ -739,7 +638,6 @@ std::cout << std::endl;
   auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
   EventManager::getInstance().addEvent(event);
   //syclcompat::wait();
-#endif  
 }
 
 template void gemm_4bit_inference_cutlass_dequant<sycl::ext::oneapi::bfloat16, 16>(
