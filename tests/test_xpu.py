@@ -40,7 +40,7 @@ class TestXPU:
     @pytest.mark.parametrize("device", ["xpu"])#get_available_devices())
     @pytest.mark.parametrize("double_quant", [True], ids=lambda double_quant: f"DQ_{double_quant}")
     @pytest.mark.parametrize("storage_type", ["nf4"])
-    @pytest.mark.parametrize("kind", ["fc1"])#, "attn_packed"])
+    @pytest.mark.parametrize("kind", ["fc0"])#, "attn_packed"])
     @pytest.mark.parametrize("dtype", [torch.bfloat16], ids=describe_dtype)
     @pytest.mark.parametrize(
         "quant_storage",
@@ -65,10 +65,30 @@ class TestXPU:
 
         #for i in range(iters):
         #pdb.set_trace()
-        if kind == "fc1":
+        if kind == "fc0":
+            dim = 16
+            #A = torch.arange(32, 0, -2).reshape(1, dim).bfloat16().xpu()  * torch.randn(1, dim, dtype=dtype, device=device) * 10
+            #shuffled_indices = torch.randperm(dim)
+            #A = A[:, shuffled_indices]  # 直接索引列
+
+            #B = torch.arange(0, 32, 1).reshape(2, dim).bfloat16().xpu() * torch.randn(2, dim, dtype=dtype, device=device) / 10 
+            #shuffled_indices = torch.randperm(dim)
+            #B = B[:, shuffled_indices].contiguous()  # 直接索引列
+
+            #A = torch.ones(1, dim, dtype=dtype, device=device)
+            #B = torch.ones(2, dim, dtype=dtype, device=device) # / math.sqrt(dim)
+
+            A = torch.randn(1, dim, dtype=dtype, device=device) * 10
+            B = torch.randn(2, dim, dtype=dtype, device=device)  / math.sqrt(dim)
+            double_quant=False
+            block_size = 16
+        elif kind == "fc1":
+            dim=256
             A = torch.randn(32, dim, dtype=dtype, device=device) * 10
             #A = torch.arange(1, 32 * 256 + 1).reshape(32, 256).bfloat16().xpu()
-            B = torch.randn(dim, dim, dtype=dtype, device=device) / math.sqrt(dim)
+            B = torch.randn(dim, dim, dtype=dtype, device=device) # / math.sqrt(dim)
+            double_quant=False
+            block_size = 32
         elif kind == "fc2":
             A = torch.randn(1, 4 * dim, dtype=dtype, device=device)
             B = torch.randn(dim, 4 * dim, dtype=dtype, device=device) / math.sqrt(dim)
@@ -84,24 +104,53 @@ class TestXPU:
             quant_type=storage_type,
             compress_statistics=double_quant,
             quant_storage=quant_storage,
-            blocksize=64,
+            blocksize=block_size,
         )
 
-        ##pdb.set_trace()
-        C3 = torch.matmul(A, B.t())
-        #pdb.set_trace()
-        C2 = F.gemv_4bit(A, qB.t(), state=state)
-        #pdb.set_trace()
-        print("C3.sum() = ", C3.sum())
-        print("C2.sum() = ", C2.sum())
-        diff = abs(C2-C3)
-        print("diff = ", diff.sum())
-        print(C3[0])
-        print(C2[0])
-        #print(C3)
-        #print(C2)
-        #A.requires_grad = True
-        #C1 = bnb.matmul_4bit(A, qB.t(), state)
+        if kind == "fc0":
+          pdb.set_trace()
+          print("")
+          print("absmax = ", state.absmax)
+          print("A = ",A)
+          print("B = ",B)
+          print("qB = ",qB)
+          print("B.t() = ",B.t())
+          print("qB.t() = ",qB.t())
+          C3 = torch.matmul(A, B.t())
+          #pdb.set_trace()
+          C2 = F.gemv_4bit(A, qB.t(), state=state)
+          #pdb.set_trace()
+          print("C3.sum() = ", C3.sum())
+          print("C2.sum() = ", C2.sum())
+          diff = abs(C2-C3)
+          print("diff = ", diff.sum())
+          print(C3)
+          print(C2)
+          #exit()
+          #print(C3)
+          #print(C2)
+          #A.requires_grad = True
+          #C1 = bnb.matmul_4bit(A, qB.t(), state)          
+        else:
+          pdb.set_trace()
+          print("")
+          print("absmax = ", state.absmax)
+          print("A[0] = ",A[0])
+          print("B[0] = ",B[0])
+          C3 = torch.matmul(A, B.t())
+          #pdb.set_trace()
+          C2 = F.gemv_4bit(A, qB.t(), state=state)
+          #pdb.set_trace()
+          print("C3.sum() = ", C3.sum())
+          print("C2.sum() = ", C2.sum())
+          diff = abs(C2-C3)
+          print("diff = ", diff.sum())
+          print(C3[0])
+          print(C2[0])
+          #print(C3)
+          #print(C2)
+          #A.requires_grad = True
+          #C1 = bnb.matmul_4bit(A, qB.t(), state)
 
     @pytest.mark.parametrize("device", ["xpu"]) #get_available_devices())
     @pytest.mark.parametrize("embedding_dim", [64, 65])

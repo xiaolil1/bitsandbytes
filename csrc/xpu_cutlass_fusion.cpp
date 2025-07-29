@@ -234,23 +234,29 @@ public:
     using DstType = typename EngineOut::value_type;
     using ScaleType = typename EngineScales::value_type;
 #if 0
-    int numbers = decltype(size(in))::value;
-    for(int i=0; i<numbers; i++){
-      //auto in_ptr_8 = (uint8_t*)(raw_pointer_cast(in.data()));
-      //out[i] = static_cast<DstType>(quant_map[in_ptr_8[i].data()]);
-      uint8_t value = in[i].get();
-      out[i] = static_cast<DstType>(quant_map[value]);
-      int thread_idx = int(ThreadIdxX());
-      if(cute::thread0()){
-      //if(syclcompat::global_id::x() == 2 && syclcompat::global_id::y() ==0 && syclcompat::global_id::z() ==0 )
-        //printf("syclcompat::global_id::x() = %d, syclcompat::global_id::y() = %d, syclcompat::global_id::z() = %d, thread_idx = %d, i = %d, in[i].ptr_ = %x, in[i].idx_=%x, value_bit = %x, value = %d, quant_map[value] = %f, out[i] = %f\n",syclcompat::global_id::x(), syclcompat::global_id::y(), syclcompat::global_id::z(), thread_idx, i, in[i].ptr_, in[i].idx_, value, static_cast<int>(value), quant_map[value], static_cast<float>(out[i]));
-      }
-    }
-    int scale_number = decltype(size(tCrS_input))::value;
-    for(int i=0; i<scale_number; i++){
+    static constexpr auto N = decltype(size<1>(in))::value;
+    static constexpr auto loop_cnt = decltype(size(out))::value / N;
+    for (int n = 0; n < N; n++) {
       auto s_value = tCrS_input(i);
-      if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, static_cast<float>(s_value));
-    }
+      for (int l = 0; s < loop_cnt; l++) {
+      
+//      int numbers = decltype(size(in))::value;
+//      for(int i=0; i<numbers / N; i++){
+//        //auto in_ptr_8 = (uint8_t*)(raw_pointer_cast(in.data()));
+//        //out[i] = static_cast<DstType>(quant_map[in_ptr_8[i].data()]);
+//        uint8_t value = in[i].get();
+//        out[i] = static_cast<DstType>(quant_map[value]);
+//        int thread_idx = int(ThreadIdxX());
+//        if(cute::thread0()){
+//        //if(syclcompat::global_id::x() == 2 && syclcompat::global_id::y() ==0 && syclcompat::global_id::z() ==0 )
+//          //printf("syclcompat::global_id::x() = %d, syclcompat::global_id::y() = %d, syclcompat::global_id::z() = %d, thread_idx = %d, i = %d, in[i].ptr_ = %x, in[i].idx_=%x, value_bit = %x, value = %d, quant_map[value] = %f, out[i] = %f\n",syclcompat::global_id::x(), syclcompat::global_id::y(), syclcompat::global_id::z(), thread_idx, i, in[i].ptr_, in[i].idx_, value, static_cast<int>(value), quant_map[value], static_cast<float>(out[i]));
+//        }
+//      }
+//    int scale_number = decltype(size(tCrS_input))::value;
+//    for(int i=0; i<scale_number; i++){
+//      auto s_value = tCrS_input(i);
+//      if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, static_cast<float>(s_value));
+//    }
 #else    
     static constexpr auto N = decltype(size<1>(in))::value;
 
@@ -269,7 +275,11 @@ public:
     auto s_tensor = make_tensor((format_type*)(raw_pointer_cast(in.data())), Shape<Int<loop_cnt / scalar>, Int<N>>{});
     auto d_tensor = make_tensor(out.data(), Shape<Int<vec_size>, Int<splits>, Int<N>>{});
 
-//if(cute::thread0())
+int scale_number = decltype(size(tCrS_input))::value;
+for(int i=0; i<scale_number; i++){
+  auto s_value = tCrS_input(i);
+  if(cute::thread0()) printf("scale_number = %d, tCrS_input[%d] = %f\n",scale_number, i, static_cast<float>(s_value));
+}
 //  printf("thread_idx = %d, decltype(size(in))::value = %d, K = %d, N = %d, L = %d, src_bits = %d, sizeof_bits_v<format_type> = %d, scalar = %d, decltype(size(out))::value = %d, loop_cnt = %d, splits = %d\n",int(ThreadIdxX()), decltype(size(in))::value, decltype(size<0>(in))::value, N, decltype(size<2>(in))::value, src_bits, sizeof_bits_v<format_type>, scalar, decltype(size(out))::value, loop_cnt, splits);
 
     for (int n = 0; n < N; n++) {
@@ -285,8 +295,13 @@ public:
 
         for (int i = 0; i < vec_size; i++) {
           uint8_t value = (format_data >> (src_bits * i)) & 0xf;
-          dst[i] = static_cast<DstType>(quant_map[value] * static_cast<float>(ts));          
-          //if(cute::thread0()) printf("n = %d, s = %d, i = %d, src = %d, quant_map[value] = %f, ts = %f, dst = %f\n", n, s, i, static_cast<int>(value), quant_map[value], static_cast<float>(ts), static_cast<float>(dst[i]));
+          if(i % 2 != 0) { //1,3, high_4bit
+            dst[i-1] = static_cast<DstType>(quant_map[value] * static_cast<float>(ts));          
+          } else {
+            dst[i+1] = static_cast<DstType>(quant_map[value] * static_cast<float>(ts));          
+          }
+          if(cute::thread0())
+            printf("tid = %d, n = %d, s = %d, i = %d, format_data = %d, value = %d, quant_map[value] = %f, ts = %f, dst = %f\n",ThreadIdxX(), n, s, i, static_cast<int>(format_data), static_cast<int>(value), quant_map[value], static_cast<float>(ts), static_cast<float>(dst[i]));
         }
       }
     }
@@ -500,29 +515,38 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
       }
   #undef PRINT
 #endif  
-	const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
+	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = k_start_idx;
 
+#if 1
+    const int k_reload_factor = ceil_div(params.group_size, BLK_K);
+    if(cute::thread0()) printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %f\n",params.group_size, BLK_K, k_reload_factor);
+#endif
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
       prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
       prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
 
-    for (int k_tile = k_start_idx; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++) {
+    for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++, k_s++) {
       barrier_arrive(2);
 
       // Copy gmem to rmem for the first k_tile
       copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
-
+#if 1
+      const int s_step = k_start_idx + (k_s / k_reload_factor); //1 + k_tile / k_reload_factor;
+      if(cute::thread0()) printf("k_start_idx = %d, k_s = %d, k_reload_factor = %f, s_step = %d\n",k_start_idx, k_s, k_reload_factor, s_step);
+      copy(tiled_copy_scale, copy_iter_s(_, _, _, s_step), frag_copy_Scale);
+#else
       const int k_reload_factor = ceil_div(params.group_size, BLK_K);
       //const int k_reload_factor = params.group_size / BLK_K;
 
-      if(cute::thread0()) printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %d\n",params.group_size, BLK_K, k_reload_factor);
+      //if(cute::thread0())
+        printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %d\n",params.group_size, BLK_K, k_reload_factor);
 
       copy(tiled_copy_scale, copy_iter_s(_, _, _, k_tile / k_reload_factor), frag_copy_Scale);
-
+#endif
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
       }
@@ -563,12 +587,10 @@ if (cute::thread0()) {
 // 打印输出
 debug_print("Accumulators (After GEMM)", accumulators);
 
-barrier_wait(2);
 }
 #endif
 #if 0
 cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
-barrier_wait(2);
 
 for (int i = 0; i < accumulators.size(); ++i) {
     printf("Thread (%d, %d): accumulators[%d] =%f\n", syclcompat::global_id::x() , syclcompat::global_id::y(), i, static_cast<float>(accumulators[i]));
