@@ -67,7 +67,8 @@ class TestXPU:
         #pdb.set_trace()
         if kind == "fc1":
             A = torch.randn(32, dim, dtype=dtype, device=device)
-            B = torch.randn(dim, dim, dtype=dtype, device=device) / math.sqrt(dim)
+            #A = torch.arange(1, 32 * 256 + 1).reshape(32, 256).bfloat16().xpu()
+            B = torch.ones(dim, dim, dtype=dtype, device=device) / math.sqrt(dim)
         elif kind == "fc2":
             A = torch.randn(1, 4 * dim, dtype=dtype, device=device)
             B = torch.randn(dim, 4 * dim, dtype=dtype, device=device) / math.sqrt(dim)

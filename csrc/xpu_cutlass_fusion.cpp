@@ -64,37 +64,37 @@ using TiledMma =
                                     Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 
 using WorkgroupTileShape = TileShape;
-static constexpr auto BLK_M = get<0>(WorkgroupTileShape{}); //16
-static constexpr auto BLK_N = get<1>(WorkgroupTileShape{}); //64
-static constexpr auto BLK_K = get<2>(WorkgroupTileShape{}); //64
+static constexpr auto BLK_M = get<0>(WorkgroupTileShape{}); //256 //16
+static constexpr auto BLK_N = get<1>(WorkgroupTileShape{}); //256 //64
+static constexpr auto BLK_K = get<2>(WorkgroupTileShape{}); //32  //64
 
 //Threads number
-static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape()); //1
-static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape()); //2
-static constexpr auto ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape()); //1
+static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape()); //8 //1
+static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape()); //4 //2
+static constexpr auto ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape()); //1 //1
 
 static_assert(BLK_M % TiledMma{}.template tile_size_mnk<0>() == 0, "TiledMma permutation size must match block size.");
 static_assert(BLK_N % TiledMma{}.template tile_size_mnk<1>() == 0, "TiledMma permutation size must match block size.");
 static_assert(BLK_K % TiledMma{}.template tile_size_mnk<2>() == 0, "TiledMma permutation size must match block size.");
 
 //sub-tile shape
-static constexpr auto SG_M = ceil_div(BLK_M, ATOM_M); //16
-static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N); //32
-static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K); //64
+static constexpr auto SG_M = ceil_div(BLK_M, ATOM_M); //32 //16
+static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N); //64 //32
+static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K); //32 //64
 using SubgroupTileShape = Shape<decltype(SG_M), decltype(SG_N), decltype(SG_K)>; //<16, 32, 64>
 
 //Total Threads number
-static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K; //2
-static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}); //1*2*1*16=32
+static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K; //32 //2
+static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}); //8*4*1*16=512 //1*2*1*16=32
 
 // Define Mainloop dispatch policy
-constexpr int PipelineStages = 3;
+constexpr int PipelineStages = 2;
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
-static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // sub_group size
+static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // 16 
 
 // Design Epilogue
 using EpilogueDispatchPolicy = cutlass::epilogue::IntelPVCEpilogue;
-using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<float /*data_type of GEMM output*/, ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
+using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<ElementAccumulator, ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
 using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape, decltype(tile_shape(TiledMma()))>;
 using SharedStorage = FusionCallBacks::SharedStorage;
 
@@ -112,7 +112,7 @@ using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
         TileShape,
         ElementAccumulator,
         cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>, // Convert CUTLASS 2.x to CUTLASS 3.x representation
-        float, // data_type of output: out
+        ElementOutput,
         cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>, // Convert CUTLASS 2.x to CUTLASS 3.x representation
         FusionCallBacks,
         XE_2D_U32x8x16_LD_N, // The copy atom used to load matrix C
@@ -120,7 +120,6 @@ using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
         XE_2D_U32x8x16_ST_N, // The copy atom used to store matrix D
         void, void>;
 using EpilogueParams = typename CollectiveEpilogue::Params;
-using EpilogueArguments = typename CollectiveEpilogue::Arguments;
 
 using ClusterShape = typename DispatchPolicy::ClusterShape;
 
@@ -287,7 +286,7 @@ public:
         for (int i = 0; i < vec_size; i++) {
           uint8_t value = (format_data >> (src_bits * i)) & 0xf;
           dst[i] = static_cast<DstType>(quant_map[value] * static_cast<float>(ts));          
-          if(cute::thread0()) printf("n = %d, s = %d, i = %d, src = %d, quant_map[value] = %f, ts = %f, dst = %f\n", n, s, i, static_cast<int>(value), quant_map[value], static_cast<float>(ts), static_cast<float>(dst[i]));
+          //if(cute::thread0()) printf("n = %d, s = %d, i = %d, src = %d, quant_map[value] = %f, ts = %f, dst = %f\n", n, s, i, static_cast<int>(value), quant_map[value], static_cast<float>(ts), static_cast<float>(dst[i]));
         }
       }
     }
@@ -665,22 +664,25 @@ std::cout << std::endl;
 
   params.tiled_copy_scale = tiled_copy_scale;
 
-  #define PRINT(x) print(#x ": "); print(x); print("\n");
-    if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
-        print("=====================  B :\n");
-        print("  stride_B : ");   print(stride_B);   print("\n");
-        print("  stride_S : ");   print(stride_S);   print("\n");
-        print("=====================  B :\n");
-      }
-  #undef PRINT
-
   cutlass::KernelHardwareInfo hw_info;
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
-  auto problem_shape_MNKL = append<4>(problem_size, 1);
-  float alpha=1.0;
+  auto problem_shape_MNKL = problem_size; //append<4>(problem_size, 1);
+  float alpha=1.0f;
   float beta=0.f;
   StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(m, n, l));
-  StrideC stride_D = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(m, n, l));
+  StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(m, n, l));
+
+  #define PRINT(x) print(#x ": "); print(x); print("\n");
+    if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
+        print("=====================  stride :\n");
+        print("  stride_A : ");   print(stride_A);   print("\n");
+        print("  stride_B : ");   print(stride_B);   print("\n");
+        print("  stride_C : ");   print(stride_C);   print("\n");
+        print("  stride_D : ");   print(stride_D);   print("\n");
+        print("  stride_S : ");   print(stride_S);   print("\n");
+        print("=====================  stride :\n");
+      }
+  #undef PRINT
 
   params.hw_info = hw_info;
   params.epilogue = CollectiveEpilogue::to_underlying_arguments(problem_size, {{alpha, beta}, nullptr, stride_C, out, stride_D}, nullptr);
