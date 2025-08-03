@@ -313,7 +313,25 @@ struct TiledMMA : MMA_Atom
                               make_tile(make_layout(size<1>(thr_layout_vmnk_)),
                                         make_layout(size<3>(thr_layout_vmnk_))));
     auto thr_tensor = zipped_divide(tv_tensor, thr_tile);            // ((ThrV,(ThrM,ThrK)),(FrgV,(RestM,RestK)))
-
+#if 1 
+    if(cute::thread0()){
+      print("========================thrfrg_A: \n");
+      print("atensor: "); print(atensor); print("\n");
+      print("permutation_mnk<0>: "); print(permutation_mnk<0>()); print("\n");
+      print("permutation_mnk<2>: "); print(permutation_mnk<2>()); print("\n");
+      print("t_tile: "); print(t_tile); print("\n");
+      print("t_tensor: "); print(t_tensor); print("\n");
+      print("AtomShape_MNK: "); print(AtomShape_MNK{}); print("\n");
+      print("a_tile: "); print(a_tile); print("\n");
+      print("a_tensor: "); print(a_tensor); print("\n");
+      print("AtomLayoutA_TV: "); print(AtomLayoutA_TV{}); print("\n");
+      print("tv_tensor: "); print(tv_tensor); print("\n");
+      print("thr_layout_vmnk_: "); print(thr_layout_vmnk_); print("\n");
+      print("thr_tile: "); print(thr_tile); print("\n");
+      print("thr_tensor: "); print(thr_tensor); print("\n");
+      print("==================================== \n");
+    }
+#endif    
     return thr_tensor;
   }
 
@@ -352,7 +370,25 @@ struct TiledMMA : MMA_Atom
                               make_tile(make_layout(size<2>(thr_layout_vmnk_)),
                                         make_layout(size<3>(thr_layout_vmnk_))));
     auto thr_tensor = zipped_divide(tv_tensor, thr_tile);            // ((ThrV,(ThrN,ThrK)),(FrgV,(RestN,RestK)))
-
+#if 1    
+    if(cute::thread0()){
+      print("========================thrfrg_B: \n");
+      print("permutation_mnk<1>: "); print(permutation_mnk<1>()); print("\n");
+      print("permutation_mnk<2>: "); print(permutation_mnk<2>()); print("\n");
+      print("t_tile: "); print(t_tile); print("\n");
+      print("btensor: "); print(btensor); print("\n");
+      print("t_tensor: "); print(t_tensor); print("\n");
+      print("AtomShape_MNK: "); print(AtomShape_MNK{}); print("\n");
+      print("b_tile: "); print(b_tile); print("\n");
+      print("b_tensor: "); print(b_tensor); print("\n");
+      print("AtomLayoutB_TV: "); print(AtomLayoutB_TV{}); print("\n");
+      print("tv_tensor: "); print(tv_tensor); print("\n");
+      print("thr_layout_vmnk_: "); print(thr_layout_vmnk_); print("\n");
+      print("thr_tile: "); print(thr_tile); print("\n");
+      print("thr_tensor: "); print(thr_tensor); print("\n");
+      print("==================================== \n");
+    }
+#endif    
     return thr_tensor;
   }
 
@@ -523,6 +559,7 @@ struct ThrMMA : TiledMMA
     auto thr_tensor = make_tensor(static_cast<CTensor&&>(ctensor).data(), this->thrfrg_C(ctensor.layout()));
 
     auto thr_vmn = make_coord(get<0>(thr_vmnk_), make_coord(get<1>(thr_vmnk_), get<2>(thr_vmnk_)));
+    //if(cute::thread0()) printf("partition_C: get<0>(thr_vmnk_) = %d, get<1>(thr_vmnk_) = %d, get<2>(thr_vmnk_) = %d\n", static_cast<int>(get<0>(thr_vmnk_)),static_cast<int>(get<1>(thr_vmnk_)),static_cast<int>(get<2>(thr_vmnk_)));
     return thr_tensor(thr_vmn, make_coord(_, repeat<rank<1,1>(thr_tensor)>(_)));
   }
 
@@ -534,6 +571,7 @@ struct ThrMMA : TiledMMA
     auto thr_tensor = make_tensor(static_cast<ATensor&&>(atensor).data(), this->thrfrg_A(atensor.layout()));
 
     auto thr_vmk = make_coord(get<0>(thr_vmnk_), make_coord(get<1>(thr_vmnk_), get<3>(thr_vmnk_)));
+    //if(cute::thread0()) printf("partition_A: get<0>(thr_vmnk_) = %d, get<1>(thr_vmnk_) = %d, get<3>(thr_vmnk_) = %d\n", static_cast<int>(get<0>(thr_vmnk_)),static_cast<int>(get<1>(thr_vmnk_)),static_cast<int>(get<3>(thr_vmnk_)));
     return thr_tensor(thr_vmk, make_coord(_, repeat<rank<1,1>(thr_tensor)>(_)));
   }
 
@@ -545,6 +583,7 @@ struct ThrMMA : TiledMMA
     auto thr_tensor = make_tensor(static_cast<BTensor&&>(btensor).data(), this->thrfrg_B(btensor.layout()));
 
     auto thr_vnk = make_coord(get<0>(thr_vmnk_), make_coord(get<2>(thr_vmnk_), get<3>(thr_vmnk_)));
+    //if(cute::thread0()) printf("partition_B: get<0>(thr_vmnk_) = %d, get<2>(thr_vmnk_) = %d, get<3>(thr_vmnk_) = %d\n", static_cast<int>(get<0>(thr_vmnk_)),static_cast<int>(get<2>(thr_vmnk_)),static_cast<int>(get<3>(thr_vmnk_)));
     return thr_tensor(thr_vnk, make_coord(_, repeat<rank<1,1>(thr_tensor)>(_)));
   }
 

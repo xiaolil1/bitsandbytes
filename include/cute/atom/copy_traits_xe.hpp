@@ -210,14 +210,12 @@ struct XE_2D_LD_Unpack {
   // It mean (M, N):(N, 1) convention if 'is_convention_MN' is true, (N, M):(1, N) convention otherwise.
   static constexpr bool is_convention_MN = !(is_need_reversed ^ is_column_major);
 
-  // 2d copy parameters
+// 2d copy parameters
   const void *base_ptr;
   uint32_t width;
   uint32_t height;
   uint32_t pitch;
   uint32_t stride_l = 0;
-
-
 
   XE_2D_LD_Unpack(const void *ptr, uint32_t y,
                  uint32_t x, uint32_t p = 0) : base_ptr(ptr) {
@@ -235,6 +233,15 @@ struct XE_2D_LD_Unpack {
 
   template <class... TensorArgs>
   XE_2D_LD_Unpack(Tensor<TensorArgs...> const &tensor) {
+#if 1
+    if(cute::thread0()){
+      print("===============================\n");
+      print("is_column_major : "); print(is_column_major); print("\n");
+      print("is_need_reversed : "); print(is_need_reversed); print("\n");
+      print("is_convention_MN : "); print(is_convention_MN); print("\n");
+      print("===============================\n");
+    }
+#endif    
     base_ptr = raw_pointer_cast(tensor.data());
 
     if constexpr (is_need_reversed)
@@ -430,7 +437,25 @@ CUTE_HOST_DEVICE constexpr auto make_fragment_layout(TiledCopy &tiled_copy,
   auto order = std::conditional_t<TiledCopy::is_convention_MN,
                                   Step<Step<_0, _1>, Step<_2, _4>, Step<_3, _5>>,
                                   Step<Step<_0, _1>, Step<_3, _5>, Step<_2, _4>>>{};
-
+#if 1                                  
+  if(cute::thread0()){
+    print("========================make_fragment_layout: \n");
+    print("fragment_top_level_shape: "); print(fragment_top_level_shape); print("\n");
+    print("mma_atom_shape: "); print(mma_atom_shape); print("\n");
+    print("total_mma_atom_iters_M: "); print(total_mma_atom_iters_M); print("\n");
+    print("total_mma_atom_iters_N: "); print(total_mma_atom_iters_N); print("\n");
+    print("ThreadLayout_: "); print(ThreadLayout_{}); print("\n");
+    print("ThreadLayout: "); print(ThreadLayout{}); print("\n");
+    print("thread_copy_shape: "); print(thread_copy_shape); print("\n");
+    print("mma_atom_iters_in_copy_M: "); print(mma_atom_iters_in_copy_M); print("\n");
+    print("mma_atom_iters_in_copy_N: "); print(mma_atom_iters_in_copy_N); print("\n");
+    print("copy_iters_M: "); print(copy_iters_M); print("\n");
+    print("copy_iters_N: "); print(copy_iters_N); print("\n");
+    print("order: "); print(order); print("\n");
+    print("mma_atom_shape_2d: "); print(mma_atom_shape_2d); print("\n");
+    print("============================================== \n");
+  }
+#endif  
   return make_ordered_layout(make_shape(mma_atom_shape_2d,
                                         make_shape(mma_atom_iters_in_copy_M, copy_iters_M),
                                         make_shape(mma_atom_iters_in_copy_N, copy_iters_N)),

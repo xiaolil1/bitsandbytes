@@ -83,12 +83,12 @@ class TestXPU:
             double_quant=False
             block_size = 16
         elif kind == "fc1":
-            dim=4096
+            dim=256
             A = torch.randn(64, dim, dtype=dtype, device=device)
             #A = torch.arange(1, 32 * 256 + 1).reshape(32, 256).bfloat16().xpu()
             B = torch.randn(dim , dim, dtype=dtype, device=device)  / math.sqrt(dim)
             double_quant=False
-            block_size = 32
+            block_size = 64
         elif kind == "fc2":
             A = torch.randn(1, 4 * dim, dtype=dtype, device=device)
             B = torch.randn(dim, 4 * dim, dtype=dtype, device=device) / math.sqrt(dim)
@@ -144,7 +144,7 @@ class TestXPU:
           #print("C3.sum() = ", C3.sum())
           #print("C2.sum() = ", C2.sum())
           diff = abs(C2-C3.bfloat16())
-          print("diff = ", diff[0])
+          print("diff/C2 = ", diff[0]/C2[0])
           print(C3[0])
           print(C2[0])
           #print(C3)
