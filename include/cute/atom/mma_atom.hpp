@@ -313,7 +313,7 @@ struct TiledMMA : MMA_Atom
                               make_tile(make_layout(size<1>(thr_layout_vmnk_)),
                                         make_layout(size<3>(thr_layout_vmnk_))));
     auto thr_tensor = zipped_divide(tv_tensor, thr_tile);            // ((ThrV,(ThrM,ThrK)),(FrgV,(RestM,RestK)))
-#if 1 
+#if 0 
     if(cute::thread0()){
       print("========================thrfrg_A: \n");
       print("atensor: "); print(atensor); print("\n");
@@ -370,7 +370,7 @@ struct TiledMMA : MMA_Atom
                               make_tile(make_layout(size<2>(thr_layout_vmnk_)),
                                         make_layout(size<3>(thr_layout_vmnk_))));
     auto thr_tensor = zipped_divide(tv_tensor, thr_tile);            // ((ThrV,(ThrN,ThrK)),(FrgV,(RestN,RestK)))
-#if 1    
+#if 0    
     if(cute::thread0()){
       print("========================thrfrg_B: \n");
       print("permutation_mnk<1>: "); print(permutation_mnk<1>()); print("\n");

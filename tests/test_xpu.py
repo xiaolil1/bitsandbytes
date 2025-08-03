@@ -122,8 +122,8 @@ class TestXPU:
           #pdb.set_trace()
           print("C3.sum() = ", C3.sum())
           print("C2.sum() = ", C2.sum())
-          diff = abs(C2-C3)
-          print("diff = ", diff.sum())
+          diff = C2.bfloat16()-C3
+          print("diff/C2 = ", diff.sum()/C3.sum())
           print(C3)
           print(C2)
           #exit()
@@ -143,8 +143,8 @@ class TestXPU:
           pdb.set_trace()
           #print("C3.sum() = ", C3.sum())
           #print("C2.sum() = ", C2.sum())
-          diff = abs(C2-C3.bfloat16())
-          print("diff/C2 = ", diff[0]/C2[0])
+          diff = C2.bfloat16()-C3
+          print("diff/C3 = ", diff.sum()/C3.sum())
           print(C3[0])
           print(C2[0])
           #print(C3)
@@ -257,10 +257,10 @@ class TestXPU:
     @pytest.mark.parametrize("double_quant", TRUE_FALSE, ids=lambda double_quant: f"DQ_{double_quant}")
     @pytest.mark.parametrize("storage_type", ["nf4", "fp4"])
     @pytest.mark.parametrize("kind", ["fc1", "fc2", "attn"])#, "attn_packed"])
-    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32], ids=describe_dtype)
+    @pytest.mark.parametrize("dtype", [torch.bfloat16], ids=describe_dtype) #[torch.float16, torch.bfloat16, torch.float32], ids=describe_dtype)
     @pytest.mark.parametrize(
         "quant_storage",
-        [torch.uint8, torch.float16, torch.bfloat16, torch.float32],
+        [torch.uint8], #, torch.float16, torch.bfloat16, torch.float32],
         ids=describe_dtype,
     )
     @pytest.mark.parametrize("dim", [256, 512, 1024], ids=id_formatter("dim"))

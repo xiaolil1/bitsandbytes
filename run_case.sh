@@ -28,7 +28,8 @@
 
 
 #gdb -args python -m pytest -vs tests/test_xpu.py::TestXPU::test_gemm_4bit
-pytest -vs tests/test_xpu.py::TestXPU::test_gemm_4bit
+#pytest -vs tests/test_xpu.py::TestXPU::test_gemm_4bit
+pytest -vs tests/test_xpu.py::TestXPU::test_gemv_4bit
 #python tests/test_xpu_db.py
 #gdb -args python tests/test_xpu_db.py
 #pytest tests/test_functional.py::TestQuantize4BitFunctional::test_gemv_4bit[dim=256-uint8-bf16-fc1-nf4-DQ_True-xpu]

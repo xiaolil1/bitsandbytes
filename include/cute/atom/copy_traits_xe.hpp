@@ -233,7 +233,7 @@ struct XE_2D_LD_Unpack {
 
   template <class... TensorArgs>
   XE_2D_LD_Unpack(Tensor<TensorArgs...> const &tensor) {
-#if 1
+#if 0
     if(cute::thread0()){
       print("===============================\n");
       print("is_column_major : "); print(is_column_major); print("\n");
@@ -437,7 +437,7 @@ CUTE_HOST_DEVICE constexpr auto make_fragment_layout(TiledCopy &tiled_copy,
   auto order = std::conditional_t<TiledCopy::is_convention_MN,
                                   Step<Step<_0, _1>, Step<_2, _4>, Step<_3, _5>>,
                                   Step<Step<_0, _1>, Step<_3, _5>, Step<_2, _4>>>{};
-#if 1                                  
+#if 0                                  
   if(cute::thread0()){
     print("========================make_fragment_layout: \n");
     print("fragment_top_level_shape: "); print(fragment_top_level_shape); print("\n");

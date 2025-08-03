@@ -275,7 +275,7 @@ public:
 
     static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 
-    if(cute::thread0()) printf("BLK_M = %d, BLK_N = %d, BLK_K = %d, ATOM_M = %d, ATOM_N = %d, ATOM_K = %d, SG_M = %d, SG_N = %d, SG_K = %d, Num_SGs = %d, SG_QNT_WIDTH = %d\n", static_cast<int>(BLK_M), static_cast<int>(BLK_N), static_cast<int>(BLK_K), static_cast<int>(ATOM_M), static_cast<int>(ATOM_N), static_cast<int>(ATOM_K), static_cast<int>(SG_M), static_cast<int>(SG_N), static_cast<int>(SG_K), static_cast<int>(Num_SGs), static_cast<int>(SG_QNT_WIDTH));
+    //if(cute::thread0()) printf("BLK_M = %d, BLK_N = %d, BLK_K = %d, ATOM_M = %d, ATOM_N = %d, ATOM_K = %d, SG_M = %d, SG_N = %d, SG_K = %d, Num_SGs = %d, SG_QNT_WIDTH = %d\n", static_cast<int>(BLK_M), static_cast<int>(BLK_N), static_cast<int>(BLK_K), static_cast<int>(ATOM_M), static_cast<int>(ATOM_N), static_cast<int>(ATOM_K), static_cast<int>(SG_M), static_cast<int>(SG_N), static_cast<int>(SG_K), static_cast<int>(Num_SGs), static_cast<int>(SG_QNT_WIDTH));
 
     T* A = params.A;
     uint8_t* B = params.B;
@@ -393,7 +393,7 @@ public:
       
     }();
 
-#if 1
+#if 0
   #define PRINT(x) print(#x ": "); print(x); print("\n");
     if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
         print("\n\n======================= A: \n");
@@ -457,7 +457,7 @@ public:
     int prefetch_k = k_start_idx;
 
     const int k_reload_factor = ceil_div(params.group_size, BLK_K);
-    if(cute::thread0()) printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %d\n",params.group_size, static_cast<int>(BLK_K), k_reload_factor);
+    //if(cute::thread0()) printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %d\n",params.group_size, static_cast<int>(BLK_K), k_reload_factor);
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
@@ -473,7 +473,7 @@ public:
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
 
       const int s_idx = (k_start_idx + k_s) / k_reload_factor;
-      if(cute::thread0()) printf("k_start_idx = %d, k_s = %d, k_reload_factor = %d, s_idx = %d\n",k_start_idx, k_s, k_reload_factor, s_idx);
+      //if(cute::thread0()) printf("k_start_idx = %d, k_s = %d, k_reload_factor = %d, s_idx = %d\n",k_start_idx, k_s, k_reload_factor, s_idx);
       copy(tiled_copy_scale, tSgS(_, _, _, s_idx), frag_copy_Scale);
 
       if(prefetch_k < k_tile_count) {
@@ -598,7 +598,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(m, n, l));
   StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(m, n, l));
 
-#if 1
+#if 0
   #define PRINT(x) print(#x ": "); print(x); print("\n");
     if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
         print("=====================  stride :\n");
