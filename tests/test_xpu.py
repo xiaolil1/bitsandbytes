@@ -303,11 +303,12 @@ class TestXPU:
             #pdb.set_trace()
             C3 = torch.matmul(A, B.t())
             #pdb.set_trace()
-            C2 = F.gemv_4bit(A, qB.t(), state=state)
-            #A.requires_grad = True
-            C1 = bnb.matmul_4bit(A, qB.t(), state)
-
+            C2 = F.gemv_4bit(A, qB.t(), state=state).bfloat16()
+            #print("C2[0] = ", C2[0])
+            A.requires_grad = True
+            C1 = bnb.matmul_4bit(A, qB.t(), state)#.bfloat16()
             #pdb.set_trace()
+
             err1 = (C1 - C2).abs().float()
             err2 = (C3 - C2).abs().float()
             #print("err2 = ",err2)
@@ -407,6 +408,8 @@ class TestXPU:
                 assert err1 < 2e-4
                 assert relerr1 < 0.002
                 assert maxerr1 < 0.0012
+            #import pdb
+            #pdb.set_trace()
             assert absratio < 1.005 and absratio > 0.995
             assert relratio < 1.04 and relratio > 0.96
             assert maxratio < 1.02 and maxratio > 0.98
