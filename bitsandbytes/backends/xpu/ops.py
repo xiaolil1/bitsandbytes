@@ -74,20 +74,16 @@ def _gemv_4bit_impl(
     blocksize: int,
     out: torch.Tensor,
 ) -> None:
-    import pdb
-    #pdb.set_trace()
-    m = ct.c_int32(*A.shape[:-1]) #A.shape[1])
+    m = ct.c_int32(A.shape[-2])#ct.c_int32(1)
     n = ct.c_int32(shapeB[0])
     k = ct.c_int32(shapeB[1])
-
+    #import pdb
     lda = m
     ldb = ct.c_int32((A.shape[-1] + 1) // 2)
     ldc = m
-
-    #absmax = absmax * 10
     #pdb.set_trace()
-    #print("A before kernel: ", A)
-    #print("B before kernel: ", B)
+    absmax = absmax.view(shapeB[0],int(shapeB[1]/blocksize)).transpose(0,1).contiguous()
+    #pdb.set_trace()
     stream = _get_tensor_stream(A)
     if A.dtype == torch.float16:
         lib.cgemv_4bit_inference_fp16(
@@ -112,7 +108,7 @@ def _gemv_4bit_impl(
             k,
             get_ptr(A),
             get_ptr(B),
-            get_ptr(absmax.bfloat16()),
+            get_ptr(absmax),
             get_ptr(code),
             get_ptr(out),
             lda,
@@ -186,11 +182,9 @@ if not isinstance(lib, ErrorHandlerMockBNBNativeLibrary):
         blocksize: int,
     ) -> torch.Tensor:
         shape = (*A.shape[:-1], shapeB[0])
-        #import pdb
-        #pdb.set_trace()
-        out = torch.zeros(shape, device=A.device, dtype=torch.float32)
-        _gemv_4bit_impl(A, B, shapeB, absmax.bfloat16(), code, blocksize, out=out)
-        return out
+        out = torch.empty(shape, device=A.device, dtype=A.dtype).float()
+        _gemv_4bit_impl(A, B, shapeB, absmax, code, blocksize, out=out)
+        return out.bfloat16()
 
     @register_kernel("bitsandbytes::gemv_4bit.out", "xpu")
     def _(

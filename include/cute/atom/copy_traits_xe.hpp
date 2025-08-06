@@ -289,6 +289,9 @@ struct XE_2D_LD_Unpack {
 
     constexpr auto inst_size_bits = detail::size_of_inst_bits<CopyOp, dtype>;
 
+//if(cute::thread0()){
+//  print("copy base_addr: "); print(base_addr); print("\n");
+//}
     CopyOp::copy(base_addr + l * traits.stride_l,
                  (traits.width * sizeof_bits_v<dtype>) / sizeof_bits_v<int8_t>, traits.height,
                  (traits.pitch * sizeof_bits_v<dtype>) / sizeof_bits_v<int8_t>,
@@ -314,7 +317,9 @@ struct XE_2D_LD_Unpack {
     int y = is_need_reversed ? n : m;
 
     constexpr auto inst_size_bits = detail::size_of_inst_bits<CopyOp, dtype>;
-
+//if(cute::thread0()){
+//  print("prefetch base_addr: "); print(base_addr); print("\n");
+//}
     CopyOp::PREFETCH::copy(base_addr + l * atom.stride_l,
                            (atom.width * sizeof_bits_v<dtype>) / sizeof_bits_v<int8_t>, atom.height,
                            (atom.pitch * sizeof_bits_v<dtype>) / sizeof_bits_v<int8_t>,

@@ -109,7 +109,7 @@ void gemv_4bit_inference_cutlass_cute(int m, int n, int k, T *A, T *B,
 
 template <typename T, int BITS>
 void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned char *B,
-                         T *absmax, float *datatype, float *out, int lda,
+                         float *absmax, float *datatype, float *out, int lda,
                          int ldb, int ldc, int blocksize, sycl::queue *stream);
 
 template <typename T, int BITS>

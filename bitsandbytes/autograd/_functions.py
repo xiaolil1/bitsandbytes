@@ -436,7 +436,8 @@ def matmul_4bit(
     bias: Optional[torch.Tensor] = None,
 ):
     assert quant_state is not None
-
+    #import pdb
+    #pdb.set_trace()
     if A.device.type == "cpu" and A.requires_grad == False:
         if getattr(quant_state, "ipex", False):
             # IPEX CPU will change weight to 4D so don't need transpose
@@ -447,7 +448,8 @@ def matmul_4bit(
             return out
         else:
             return MatMul4Bit.apply(A, B, out, bias, quant_state)
-    if A.numel() == A.shape[-1] and A.requires_grad == False and A.device.type != "hpu":
+    #if A.numel() == A.shape[-1] and A.requires_grad == False and A.device.type != "hpu":
+    if A.requires_grad == False and A.device.type != "hpu":
         if A.shape[-1] % quant_state.blocksize != 0:
             warn(
                 f"Some matrices hidden dimension is not a multiple of {quant_state.blocksize} and efficient inference kernels are not supported for these (slow). Matrix input size found: {A.shape}",

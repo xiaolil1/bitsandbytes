@@ -118,11 +118,11 @@ class TestXPU:
           print("qB.t() = ",qB.t())
           C3 = torch.matmul(A, B.t())
           #pdb.set_trace()
-          C2 = F.gemv_4bit(A, qB.t(), state=state)
+          C2 = F.gemv_4bit(A, qB.t(), state=state).bfloat16()
           #pdb.set_trace()
           print("C3.sum() = ", C3.sum())
           print("C2.sum() = ", C2.sum())
-          diff = C2.bfloat16()-C3
+          diff = C2-C3
           print("diff/C2 = ", diff.sum()/C3.sum())
           print(C3)
           print(C2)
@@ -139,8 +139,8 @@ class TestXPU:
           #print("B[0] = ",B[0])
           C3 = torch.matmul(A, B.t())
           #pdb.set_trace()
-          C2 = F.gemv_4bit(A, qB.t(), state=state)
-          pdb.set_trace()
+          C2 = F.gemv_4bit(A, qB.t(), state=state).bfloat16()
+          #pdb.set_trace()
           #print("C3.sum() = ", C3.sum())
           #print("C2.sum() = ", C2.sum())
           diff = C2.bfloat16()-C3
@@ -282,18 +282,19 @@ class TestXPU:
         for i in range(iters):
             #pdb.set_trace()
             if kind == "fc1":
-                A = torch.randn(1, dim, dtype=dtype, device=device)
+                A = torch.randn(dim, dim, dtype=dtype, device=device)
                 B = torch.randn(dim * 4, dim, dtype=dtype, device=device) / math.sqrt(dim)
             elif kind == "fc2":
-                A = torch.randn(1, 4 * dim, dtype=dtype, device=device)
+                A = torch.randn(dim, 4 * dim, dtype=dtype, device=device)
                 B = torch.randn(dim, 4 * dim, dtype=dtype, device=device) / math.sqrt(dim)
             elif kind == "attn":
-                A = torch.randn(1, dim, dtype=dtype, device=device)
+                A = torch.randn(dim, dim, dtype=dtype, device=device)
                 B = torch.randn(dim, dim, dtype=dtype, device=device) / math.sqrt(dim)
             elif kind == "attn_packed":
-                A = torch.randn(1, dim, dtype=dtype, device=device)
+                A = torch.randn(dim, dim, dtype=dtype, device=device)
                 B = torch.randn(dim * 3, dim, dtype=dtype, device=device) / math.sqrt(dim)
 
+            #pdb.set_trace()
             qB, state = F.quantize_4bit(
                 B,
                 quant_type=storage_type,
@@ -303,10 +304,10 @@ class TestXPU:
             #pdb.set_trace()
             C3 = torch.matmul(A, B.t())
             #pdb.set_trace()
-            C2 = F.gemv_4bit(A, qB.t(), state=state).bfloat16()
+            C2 = F.gemv_4bit(A, qB.t(), state=state)
             #print("C2[0] = ", C2[0])
-            A.requires_grad = True
-            C1 = bnb.matmul_4bit(A, qB.t(), state)#.bfloat16()
+            #A.requires_grad = True
+            C1 = bnb.matmul_4bit(A, qB.t(), state)
             #pdb.set_trace()
 
             err1 = (C1 - C2).abs().float()

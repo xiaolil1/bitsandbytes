@@ -583,7 +583,13 @@ struct ThrMMA : TiledMMA
     auto thr_tensor = make_tensor(static_cast<BTensor&&>(btensor).data(), this->thrfrg_B(btensor.layout()));
 
     auto thr_vnk = make_coord(get<0>(thr_vmnk_), make_coord(get<2>(thr_vmnk_), get<3>(thr_vmnk_)));
-    //if(cute::thread0()) printf("partition_B: get<0>(thr_vmnk_) = %d, get<2>(thr_vmnk_) = %d, get<3>(thr_vmnk_) = %d\n", static_cast<int>(get<0>(thr_vmnk_)),static_cast<int>(get<2>(thr_vmnk_)),static_cast<int>(get<3>(thr_vmnk_)));
+#if 0    
+    if(int(ThreadIdxX()) == 16 && BlockIdxY()==0){
+      printf("partition_B: get<0>(thr_vmnk_) = %d, get<2>(thr_vmnk_) = %d, get<3>(thr_vmnk_) = %d\n", static_cast<int>(get<0>(thr_vmnk_)),static_cast<int>(get<2>(thr_vmnk_)),static_cast<int>(get<3>(thr_vmnk_)));
+      print("  thr_tensor   : "); print(thr_tensor);   print("\n");
+      print("  thr_tensor_return   : "); print(thr_tensor(thr_vnk, make_coord(_, repeat<rank<1,1>(thr_tensor)>(_))));   print("\n");
+    }
+#endif    
     return thr_tensor(thr_vnk, make_coord(_, repeat<rank<1,1>(thr_tensor)>(_)));
   }
 

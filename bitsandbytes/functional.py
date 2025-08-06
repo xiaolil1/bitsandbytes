@@ -937,6 +937,12 @@ def quantize_4bit(
         quant_storage,
     )
 
+    #import pdb
+    #pdb.set_trace()
+    #print("_absmax = ", _absmax)
+    #_absmax = _absmax.view(input_shape[0],int(input_shape[1]/blocksize)).transpose(0,1).contiguous()
+    #pdb.set_trace()
+
     code = get_4bit_type(quant_type, device=A.device)
 
     if compress_statistics:
@@ -969,7 +975,6 @@ def quantize_4bit(
     # TODO(matthewdouglas): Deprecate absmax kwarg
     if absmax is not None:
         state.absmax = absmax.copy_(state.absmax)
-
     return out, state
 
 
