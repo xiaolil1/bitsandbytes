@@ -384,7 +384,7 @@ void gemm_4bit_inference_bf16(
     int m, int n, int k, int l, sycl::ext::oneapi::bfloat16 * A,  unsigned char* B,   float *absmax, float *datatype, float * out,
     int lda, int ldb, int ldc, int blocksize, sycl::queue* stream
 ) {
-    gemm_4bit_inference_cutlass_dequant<sycl::ext::oneapi::bfloat16, 16>(m, n, k, l, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
+    gemm_4bit_cutlass<sycl::ext::oneapi::bfloat16, 16>(m, n, k, l, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize, stream);
 }
 #endif
 

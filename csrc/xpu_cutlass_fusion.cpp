@@ -18,10 +18,6 @@
 #include <cutlass/bfloat16.h>
 
 #include "cutlass/kernel_launch.h"
-#if !defined(__CUDACC_RTC__)
-#include "cutlass/cluster_launch.hpp"
-#include "cutlass/trace.h"
-#endif // !defined(__CUDACC_RTC__)
 
 // 2.x
 #include "cutlass/gemm/device/gemm_universal_base.h"
@@ -43,15 +39,13 @@ using namespace cutlass::gemm;
 using MmaType = sycl::ext::oneapi::bfloat16; //cutlass::bfloat16_t;
 using QuantType = cutlass::uint4_t; //NF4,FP4
 
-using ElementA = MmaType; //bfloat16_t;
-using ElementB = QuantType; //cutlass::gemm::collective::detail::deduce_mixed_width_dtype_t<0, ElementBOptionalTuple>;
+using ElementA = MmaType;
+using ElementB = QuantType;
 
 using ElementMMA = ElementA;
 using ElementQuant = QuantType;
-using ElementScale = float; //sycl::ext::oneapi::bfloat16; //MmaType;
+using ElementScale = float;
 
-using ElementC = float;
-using ElementD = float;
 using ElementAccumulator = float;      // data_type of accumulator
 using ElementComputeEpilogue = float;  // data_type of epilogue operations
 using ElementOutput = float;
@@ -83,8 +77,8 @@ static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N); //64 //32
 static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K); //32 //64
 using SubgroupTileShape = Shape<decltype(SG_M), decltype(SG_N), decltype(SG_K)>; //<16, 32, 64>
 
-//Total Threads number
 static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K; //32 //2
+static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}); //8*4*1*16=512 //1*2*1*16=32
 
 // Define Mainloop dispatch policy
@@ -99,7 +93,7 @@ using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispa
 using SharedStorage = FusionCallBacks::SharedStorage;
 
 // Design Scheduler 
-using TileScheduler_ = PersistentScheduler; //TileScheduler_;
+using TileScheduler_ = PersistentScheduler;
 static_assert(cute::is_void_v<TileScheduler_> or cute::is_same_v<TileScheduler_, PersistentScheduler>, "Intel PVC does not support specializing the tile scheduler.");
 using ArchTag = typename DispatchPolicy::ArchTag;
 using TileScheduler = typename cutlass::gemm::kernel::detail::TileSchedulerSelector<TileScheduler_, ArchTag, WorkgroupTileShape, cute::Shape<cute::Int<1>, cute::Int<1>, cute::Int<1>>>::Scheduler;
@@ -154,7 +148,7 @@ using StrideD = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
 
 
 template <typename T, int BITS>
-class kgemm_4bit_inference_cutlass_dequant {
+class gemm_4bit_cutlass_kernel {
 public:
   // Kernel level shared memory storage
   struct SharedStorage {
@@ -229,21 +223,16 @@ public:
     static constexpr auto loop_cnt = decltype(size(out))::value / N; // 128 / 2 = 64
     static_assert((scalar % N) == 0);
 
-    // for tuning performance
     static constexpr auto vec_size = scalar;
     static constexpr auto splits = loop_cnt / vec_size; // 64 / 4 = 16
     static_assert(vec_size <= scalar);
 
-    // reshape tensors for easy access
     auto s_tensor = make_tensor((format_type*)(raw_pointer_cast(in.data())), Shape<Int<loop_cnt / scalar>, Int<N>>{});
     auto d_tensor = make_tensor(out.data(), Shape<Int<vec_size>, Int<splits>, Int<N>>{});
 
     CUTLASS_PRAGMA_UNROLL
     for (int n = 0; n < N; n++) {
       DstType ts = static_cast<DstType>(tCrS_input(n));
-      //DstType ts = static_cast<DstType>(1.0f);
-      //if(cute::thread0()) printf("in = %p, tCrS_input = %p, n = %d, ts = %f\n", in, tCrS_input, n, tCrS_input(n));
-      //if(n_coord == 0) printf("tid = %d, k_start_idx = %d, k_s = %d, k_reload_factor = %d, s_idx = %d, in = %p, tCrS_input = %p, n = %d, ts = %f\n",thread_idx, k_start_idx, k_s, k_reload_factor, s_idx, in, tCrS_input, n, tCrS_input(n));
       auto& src = *(cute::array<format_type, loop_cnt / scalar>*)(s_tensor(_, n).data());
 
       CUTLASS_PRAGMA_UNROLL
@@ -258,15 +247,9 @@ public:
           uint8_t value = (format_data >> (src_bits * i)) & 0xf;
           if(i % 2 != 0) { //1,3, high_4bit
             dst[i-1] = static_cast<DstType>(quant_map[value] * ts);
-            //if(cute::thread0()) print("dst[%d] = ",i-1); print(dst[i-1]); print("\n");
-            //if(cute::thread0())
-              //print("dst[%d] = %f, ts = %f\n",i-1, static_cast<float>(dst[i-1]), static_cast<float>(ts));
           } else {
             dst[i+1] = static_cast<DstType>(quant_map[value] * ts);          
-            //if(cute::thread0())
-              //print("dst[%d] = %f, ts = %f\n",i+1, static_cast<float>(dst[i+1]), static_cast<float>(ts));
           }
-              //print("dst[%d] = %f, dst[%d] = %f, ts = %f\n",i-1, static_cast<float>(dst[i-1]), i+1, static_cast<float>(dst[i+1]), static_cast<float>(ts));
         }
       }
     }
@@ -274,22 +257,10 @@ public:
   
   CUTLASS_DEVICE
   void operator()(Params const& params, char* smem_buf) {
-    //if(cute::thread0()) printf("this is fusion kernel...........\n"); 
     int M = params.m;
     int N = params.n;
     int K = params.k;
     int L = params.l;
-    
-    //Total Threads number
-    static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K; //32 //2
-
-    static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
-
-    //if(cute::thread0()) printf("BLK_M = %d, BLK_N = %d, BLK_K = %d, ATOM_M = %d, ATOM_N = %d, ATOM_K = %d, SG_M = %d, SG_N = %d, SG_K = %d, Num_SGs = %d, SG_QNT_WIDTH = %d\n", static_cast<int>(BLK_M), static_cast<int>(BLK_N), static_cast<int>(BLK_K), static_cast<int>(ATOM_M), static_cast<int>(ATOM_N), static_cast<int>(ATOM_K), static_cast<int>(SG_M), static_cast<int>(SG_N), static_cast<int>(SG_K), static_cast<int>(Num_SGs), static_cast<int>(SG_QNT_WIDTH));
-
-    T* A = params.A;
-    uint8_t* B = params.B;
-    float* out = params.out;
     float* datatype = params.datatype;
 
     auto tiled_copy_a = params.tiled_copy_a;
@@ -298,57 +269,47 @@ public:
 
     auto problem_size = ProblemShape{M, N, K, L};
 
-    // Preconditions
     static_assert(cute::rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
 
-//// Get TID
     int thread_idx = int(ThreadIdxX());
-//// Load Dequatize LUT and save to SLM, 16 for 4bits
+    // Load Dequatize LUT and save to SLM, 16 for 4bits
     T* quant_map = reinterpret_cast<T*>(smem_buf);
     if (thread_idx < 16) {
       quant_map[thread_idx] = T(datatype[thread_idx]);
-      //printf("quant_map[%d] = %f\n", thread_idx, static_cast<float>(quant_map[thread_idx])); 
     }
     barrier_wait(1);
 
-//// Get the block level coordinate(indexing) for current block
-    auto blk_shape = TileShape{}; //16,64,64
-    int m_coord, n_coord, l_coord; //block index
+    auto blk_shape = TileShape{};
+    int m_coord, n_coord, l_coord;
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
-      //if(cute::thread0()) printf("AlongN !!\n");
       m_coord = BlockIdxY();
       n_coord = BlockIdxX();
       l_coord = BlockIdxZ();
     } else {
-      //if(cute::thread0()) printf("not AlongN !!\n");
       m_coord = BlockIdxX();
       n_coord = BlockIdxY();
       l_coord = BlockIdxZ();
     }
     auto blk_coord_mnkl = make_coord(m_coord, n_coord, _, l_coord);
-    constexpr auto workgroup_shape = WorkgroupTileShape{}; //256, 256, 32 
-    constexpr auto subgroup_tile_shape = SubgroupTileShape{}; //32, 64, 32 (number of atom level workgroup: 256/8=32, 256/4=64, 32/2=32)
+    constexpr auto workgroup_shape = WorkgroupTileShape{};
+    constexpr auto subgroup_tile_shape = SubgroupTileShape{}; 
   
-    Tensor mA_mkl = cute::get_pvc_tensor(make_shape(M,K,L)); //coordinate tensor: 0,1,2....
-    Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L)); //coordinate tensor: 0,1,2....
+    Tensor mA_mkl = cute::get_pvc_tensor(make_shape(M,K,L));
+    Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L));
   
     Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
     Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,0));		
   
-//// Allocate the tiled_mma and the accumulators for the (M,N) subgroup_tile_shape
     TiledMma tiled_mma;
     Tensor accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape)); 
     clear(accumulators);
 
-//// Create K slicing tiling iterator and count
     auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(K)), make_shape(K));
-    int k_tile_count = ceil_div(K, get<2>(workgroup_shape)); //inner_loop number
+    int k_tile_count = ceil_div(K, get<2>(workgroup_shape));
 
-
-////// MainLoop //////
     auto thr_copy_A = tiled_copy_a.get_slice(thread_idx);
     auto thr_copy_B = tiled_copy_b.get_slice(thread_idx);
 	  auto thr_copy_scale = tiled_copy_scale.get_slice(thread_idx);
@@ -357,8 +318,6 @@ public:
     auto first_thread_in_sg_idx = sg.get_group_linear_id() * DispatchPolicy::SubgroupSize;
     auto thr_mma = tiled_mma.get_slice(first_thread_in_sg_idx); 
   
-//// Create fragments：将全局或共享内存中的数据分块转换为适合硬件加速器（如 Tensor Core）计算的寄存器格式
-    // 提取分块形状（tCgA） → 生成寄存器布局（make_fragment_layout） → 创建逻辑张量（make_tensor）
     Tensor tCgA = thr_mma.partition_A(gA);
     Tensor tCgB = thr_mma.partition_B(gB);
 	
@@ -367,37 +326,32 @@ public:
 
 	  Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
 
-    static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize; //SubgroupSize; // 1
-    static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value; // 64 / 16 = 4; BLK_N: 256/4=64
-    using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>; //shape<1, 4, 1>
-    Tensor fragment_scale = make_tensor<ElementScale>(FragScaleLayout{}); // <1,4,1>
+    static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize;
+    static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
+    using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>;
+    Tensor fragment_scale = make_tensor<ElementScale>(FragScaleLayout{});
     
     static_assert(std::is_same_v<typename decltype(dequant_frag)::value_type, ElementQuant>);
     static_assert(std::is_same_v<typename decltype(mma_A)::value_type, ElementMMA>);
     static_assert(std::is_same_v<typename decltype(mma_B)::value_type, ElementMMA>);
 
-//// Retile for copy
     Tensor frag_copy_A = thr_copy_A.retile_D(mma_A);
     Tensor frag_copy_B = thr_copy_B.retile_D(dequant_frag);
     Tensor frag_copy_Scale = thr_copy_scale.retile_D(fragment_scale);
 
-//// Retile global counting tensors for copies: 
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
     Tensor tBgB = thr_copy_B.retile_S(tCgB);
 
-//// Prepare for prefetch
     auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(tiled_copy_a);;
     auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(tiled_copy_b);;
     auto thr_prefetch_A = tiled_prefetch_a.get_slice(thread_idx);
     auto thr_prefetch_B = tiled_prefetch_b.get_slice(thread_idx);
 
-    // Partition global tile for prefetch
     auto pAgA = thr_prefetch_A.partition_S(gA);
     auto pBgB = thr_prefetch_B.partition_S(gB);
 	
     const int k_reload_factor = ceil_div(params.group_size, BLK_K);
 
-// Run mainloop
     auto thr_vmnk = thr_mma.thr_vmnk_;
     int S_offset = get<2>(thr_vmnk)*SG_QNT_WIDTH;
     auto tSgS = [&](){
@@ -406,87 +360,61 @@ public:
                                       make_stride(E<0>{}*_16{}, E<0>{}*_16{}, _0{}, E<1>{}*_1{})));
       
     }();
-    //auto thr_vmnk = thr_mma.thr_vmnk_;
-    //int S_n_iter = get<2>(thr_vmnk)*SG_QNT_WIDTH;
-    //auto thr_vnk = make_coord(get<0>(thr_vmnk), make_coord(get<2>(thr_vmnk), get<3>(thr_vmnk)));
-    //tSgS = tSgS(get<2>(thr_vmnk)*SG_QNT_WIDTH);//, make_coord(_, repeat<rank<1>(tSgS)>(_)));
 
-    //if(cute::thread0()){
-      //print_latex(tiled_copy_scale);
-      // print("  tSgS : "); print(tSgS); print("\n");
-    //   printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %d, k_tile_count = %d\n",params.group_size, static_cast<int>(BLK_K), k_reload_factor, k_tile_count);
-    //   //auto ptr = reinterpret_cast<float*>(params.absmax);
-    //   //printf("s_idx=0, n_coord = %d, l_coord = %d, addr: %p\n", n_coord, l_coord, ptr + n_coord*1 + 0*4 + l_coord*1);
-    //   //printf("s_idx=1, n_coord = %d, l_coord = %d, addr: %p\n", n_coord, l_coord, ptr + n_coord*1 + 1*4 + l_coord*1);    
-    //}
 #if 0
-  #define PRINT(x) print(#x ": "); print(x); print("\n");
-    if (thread_idx==16 && n_coord == 0 && l_coord==1) { //)(cutlass::thread(LOG_THREAD, LOG_GROUP)) {
-        print("\n\n======================= A: \n");
-        print("  gA   : "); print(gA);   print("\n");
-        print("  tCgA : "); print(tCgA); print("\n");
-        print("  tAgA : "); print(tAgA); print("\n");
-        print("  mma_A : "); print(mma_A); print("\n");
-        print("  frag_copy_A : "); print(frag_copy_A); print("\n");
+  if (thread_idx==16 && n_coord == 0 && l_coord==1) {
+      print("\n\n======================= A: \n");
+      print("  gA   : "); print(gA);   print("\n");
+      print("  tCgA : "); print(tCgA); print("\n");
+      print("  tAgA : "); print(tAgA); print("\n");
+      print("  mma_A : "); print(mma_A); print("\n");
+      print("  frag_copy_A : "); print(frag_copy_A); print("\n");
 
-        print("=====================  B :\n");
-        print("  gB : ");   print(gB);   print("\n");
-        print("  tCgB : "); print(tCgB); print("\n");
-        print("  tBgB : "); print(tBgB); print("\n");
-        print("  mma_B : "); print(mma_B); print("\n");
-        print("  frag_copy_B : "); print(frag_copy_B); print("\n");
-        print("  dequant_frag : "); print(dequant_frag); print("\n");
+      print("=====================  B :\n");
+      print("  gB : ");   print(gB);   print("\n");
+      print("  tCgB : "); print(tCgB); print("\n");
+      print("  tBgB : "); print(tBgB); print("\n");
+      print("  mma_B : "); print(mma_B); print("\n");
+      print("  frag_copy_B : "); print(frag_copy_B); print("\n");
+      print("  dequant_frag : "); print(dequant_frag); print("\n");
 
-        print("=====================  Scale :\n");
-        //print("  traits_load_scale::BlockShape{} : "); print(traits_load_scale::BlockShape{}); print("\n");
-        //print("  CopyThreadShapeRev{} : "); print(CopyThreadShapeRev{}); print("\n");
-        //print("  val_layout_load_scale{} : "); print(val_layout_load_scale{}); print("\n");
-        //print("  atom_load_scale{} : "); print(atom_load_scale{}); print("\n");
-        //print("  Layout<CopyThreadShapeRev>{} : "); print(Layout<CopyThreadShapeRev>{}); print("\n");
-        //print("  Copy_Scale{} : "); print(Copy_Scale{}); print("\n");
-        print("  tiled_copy_scale : "); print(tiled_copy_scale); print("\n");
-        print("  fragment_scale : "); print(fragment_scale); print("\n");
-        print("  frag_copy_Scale : "); print(frag_copy_Scale); print("\n");
-        print("  tSgS : "); print(tSgS); print("\n");
+      print("=====================  Scale :\n");
+      print("  tiled_copy_scale : "); print(tiled_copy_scale); print("\n");
+      print("  fragment_scale : "); print(fragment_scale); print("\n");
+      print("  frag_copy_Scale : "); print(frag_copy_Scale); print("\n");
+      print("  tSgS : "); print(tSgS); print("\n");
 
-        //print("=====================  D :\n");
-        //print("  accumulators : "); print(accumulators); print("\n");
+      print("=====================  D :\n");
+      print("  accumulators : "); print(accumulators); print("\n");
 
-        //print("=====================  Config: \n");
-        //print("  threads per workgroup : "); print(MaxThreadsPerBlock);  print("\n");
-        //print("  SubgroupTileShape     : "); print(SubgroupTileShape{}); print("\n");
+      print("=====================  Config: \n");
+      print("  threads per workgroup : "); print(MaxThreadsPerBlock);  print("\n");
+      print("  SubgroupTileShape     : "); print(SubgroupTileShape{}); print("\n");
 
-        //print("=====================  Config: \n");
-        //print("  tiled_mma     : "); print(tiled_mma); print("\n");
+      print("=====================  Config: \n");
+      print("  tiled_mma     : "); print(tiled_mma); print("\n");
 
-        //print("=====================  Config: \n");
-        //print("  SubgroupTileShape     : "); print(SubgroupTileShape{}); print("\n");
+      print("=====================  Config: \n");
+      print("  SubgroupTileShape     : "); print(SubgroupTileShape{}); print("\n");
 
-        //print("=====================  Config: \n");
-        //print("  thr_mma     : "); print(thr_mma); print("\n");
+      print("=====================  Config: \n");
+      print("  thr_mma     : "); print(thr_mma); print("\n");
 
-        //print("=====================  Config: \n");
-        //print("  tiled_prefetch_a :    "); print(tiled_prefetch_a); print("\n");
+      print("=====================  Config: \n");
+      print("  tiled_prefetch_a :    "); print(tiled_prefetch_a); print("\n");
 
-        //print("=====================  Config: \n");
-        //print("  tiled_prefetch_b :    "); print(tiled_prefetch_b); print("\n");
+      print("=====================  Config: \n");
+      print("  tiled_prefetch_b :    "); print(tiled_prefetch_b); print("\n");
 
-        //print("=====================  Config: \n");
-        //print("  pAgA :    "); print(pAgA); print("\n");
+      print("=====================  Config: \n");
+      print("  pAgA :    "); print(pAgA); print("\n");
 
-        //print("=====================  Config: \n");
-        //print("  pBgB :    "); print(pBgB); print("\n\n\n");
-      }
-  #undef PRINT
+      print("=====================  Config: \n");
+      print("  pBgB :    "); print(pBgB); print("\n\n\n");
+    }
 #endif  
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = k_start_idx;
-
-    //const int k_reload_factor = ceil_div(params.group_size, BLK_K);
-    //if(cute::thread0()){
-    //  print("  tSgS : "); print(tSgS); print("\n");
-    //  printf("params.group_size = %d, BLK_K = %d, k_reload_factor = %d\n",params.group_size, static_cast<int>(BLK_K), k_reload_factor);
-    //}
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
@@ -497,18 +425,10 @@ public:
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++, k_s++) {
       barrier_arrive(2);
 
-      // Copy gmem to rmem for the first k_tile
-      //if(cute::thread0()){
-      //  printf("tiled_copy_a.data() = %p\n", tiled_copy_a.data());
-      //}
       copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
 
       const int s_idx = (k_start_idx + k_s) / k_reload_factor;
-      //if(cute::thread0()){print("  tSgS : "); print(tSgS); print("\n"); printf("k_start_idx = %d, k_s = %d, k_reload_factor = %d, s_idx = %d\n",k_start_idx, k_s, k_reload_factor, s_idx);}
-      //if (n_coord == 0) {
-      //  printf("tid = %d, k_start_idx = %d, k_s = %d, k_reload_factor = %d, s_idx = %d",thread_idx, k_start_idx, k_s, k_reload_factor, s_idx); //print("  tSgS : "); print(tSgS); print("\n"); 
-      //}
       copy(tiled_copy_scale, tSgS(_, _, _, s_idx), frag_copy_Scale);
 
       if(prefetch_k < k_tile_count) {
@@ -523,44 +443,6 @@ public:
 
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
       barrier_wait(2);
-#if 0
-// 在调用gemm前后添加打印逻辑
-auto debug_print = [&](const char* name, auto& tensor) {
-    int numbers = decltype(size(tensor))::value;
-    printf("\n----- %s ----- numbers = %d\n", name, numbers);
-    for (int i = 0; i < numbers; ++i) {
-        printf("%s[%d] = %6.2f\n", name, i , static_cast<float>(tensor[i]));
-    }
-    printf("\n\n");
-    barrier_wait(1);
-};
-
-if (cute::thread0()) {
-// 打印输入
-debug_print("Input A (mma_A)", mma_A);
-    barrier_wait(1);
-debug_print("Input B (mma_B)", mma_B);
-    barrier_wait(1);
-debug_print("Accumulators (Before GEMM)", accumulators);
-    barrier_wait(1);
-}
-// 执行GEMM
-cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
-
-if (cute::thread0()) {
-// 打印输出
-debug_print("Accumulators (After GEMM)", accumulators);
-
-}
-#endif
-#if 0
-cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
-
-for (int i = 0; i < accumulators.size(); ++i) {
-    printf("Thread (%d, %d): accumulators[%d] =%f\n", syclcompat::global_id::x() , syclcompat::global_id::y(), i, static_cast<float>(accumulators[i]));
-}
-printf("\n");
-#endif
     }
 	
     SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>((char*)nullptr);
@@ -578,35 +460,19 @@ printf("\n");
 };
 
 template <typename T, int BITS>
-void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, int l, T *A, unsigned char *B,
+void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
                          float *absmax_, float *datatype, float *out, int lda,
                          int ldb, int ldc, int blocksize, sycl::queue *stream) {
-  ////std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!!!!!\n";
   sycl::queue q = *stream;
 
-//auto absmax_h = sycl::aligned_alloc_host<float>(512, 4096, q);
-//q.memcpy(absmax_h, absmax_, 4096 * sizeof(float)).wait();
-//std::cout<<"absmax:\n";
-//for(int i=0; i<4; i++){
-//  std::cout<<"k"<<i<<", ";
-//  for(int j=0; j<1024; j++){
-//    std::cout<<absmax_h[i*1024+j]<<", ";
-//  }
-//  std::cout<<std::endl;
-//}
+  using GemmKernel = gemm_4bit_cutlass_kernel<T, BITS>;
 
-  using GemmKernel = kgemm_4bit_inference_cutlass_dequant<T, BITS>;
-
-  //static constexpr int smem_size= 512; // (16 * 32) for quant_map
-  static constexpr int smem_size= 256; // (16 * 16) for quant_map
-  //int l = 1;
+  static constexpr int smem_size= 256; 
 
   auto problem_size = ProblemShape{m, n, k, l};
 
-  // Init Params 
   using Params = GemmKernel::Params;
   Params params;
-
   params.m = m;
   params.n = n;
   params.k = k;
@@ -631,7 +497,6 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, int l, T *A, unsig
 
   const int scale_k = cute::ceil_div(k, blocksize);
   StrideScale stride_S = cutlass::make_cute_packed_stride(StrideScale{}, cute::make_shape(n, scale_k, 1));
-  //std::cout<<"m = "<<m<<" n = "<<n<<" k = "<<k<<" blocksize = "<<blocksize<<" scale_k = "<<scale_k<<std::endl;
   auto mScale = make_tensor(make_gmem_ptr(absmax_), make_layout(make_shape(n, scale_k, 1), stride_S));
   Copy_Scale tiled_copy_scale{Copy_Scale{}.with(mScale)};
 
@@ -639,31 +504,29 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, int l, T *A, unsig
 
   cutlass::KernelHardwareInfo hw_info;
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
-  auto problem_shape_MNKL = problem_size; //append<4>(problem_size, 1);
+  auto problem_shape_MNKL = problem_size;
   float alpha=1.0f;
   float beta=0.f;
   StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(m, n, l));
   StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(m, n, l));
 
 #if 0
-  #define PRINT(x) print(#x ": "); print(x); print("\n");
-    if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
-        print("=====================  stride :\n");
-        print("  stride_A : ");   print(stride_A);   print("\n");
-        print("  stride_B : ");   print(stride_B);   print("\n");
-        print("  stride_C : ");   print(stride_C);   print("\n");
-        print("  stride_D : ");   print(stride_D);   print("\n");
-        print("  stride_S : ");   print(stride_S);   print("\n");
-        print("=====================  mScale :\n");
-        print("  mA_mkl : ");   print(mA_mkl);   print("\n");
-        print("  mB_nkl : ");   print(mB_nkl);   print("\n");
-        print("  mScale : ");   print(mScale);   print("\n");
-        print("  tiled_copy_a : ");   print(tiled_copy_a);   print("\n");
-        print("  tiled_copy_b : ");   print(tiled_copy_b);   print("\n");
-        print("  tiled_copy_scale : ");   print(tiled_copy_scale);   print("\n");
-        print("================================== :\n");
-      }
-  #undef PRINT
+  if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
+      print("=====================  stride :\n");
+      print("  stride_A : ");   print(stride_A);   print("\n");
+      print("  stride_B : ");   print(stride_B);   print("\n");
+      print("  stride_C : ");   print(stride_C);   print("\n");
+      print("  stride_D : ");   print(stride_D);   print("\n");
+      print("  stride_S : ");   print(stride_S);   print("\n");
+      print("=====================  mScale :\n");
+      print("  mA_mkl : ");   print(mA_mkl);   print("\n");
+      print("  mB_nkl : ");   print(mB_nkl);   print("\n");
+      print("  mScale : ");   print(mScale);   print("\n");
+      print("  tiled_copy_a : ");   print(tiled_copy_a);   print("\n");
+      print("  tiled_copy_b : ");   print(tiled_copy_b);   print("\n");
+      print("  tiled_copy_scale : ");   print(tiled_copy_scale);   print("\n");
+      print("================================== :\n");
+    }
 #endif
 
   params.hw_info = hw_info;
@@ -679,8 +542,8 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, int l, T *A, unsig
   dim3 const block = GemmKernel::get_block_shape();
   dim3 const grid = GemmKernel::get_grid_shape(params);
 
-  const syclcompat::dim3 sycl_block(block.x, block.y, block.z); //workgroup_size: 1*2*1*16, 1, 1
-  const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);     //workgroup_number (problem_size / tile_size): N/64, M/16, 1
+  const syclcompat::dim3 sycl_block(block.x, block.y, block.z);
+  const syclcompat::dim3 sycl_grid(grid.x, grid.y, grid.z);
   //printf("Host Grid: (%d, %d, %d)\n", grid.x, grid.y, grid.z);
   //printf("Host Block: (%d, %d, %d)\n", block.x, block.y, block.z);
 
@@ -698,10 +561,9 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, int l, T *A, unsig
 
   auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
   EventManager::getInstance().addEvent(event);
-  //syclcompat::wait();
 }
 
-template void gemm_4bit_inference_cutlass_dequant<sycl::ext::oneapi::bfloat16, 16>(
+template void gemm_4bit_cutlass<sycl::ext::oneapi::bfloat16, 16>(
     int m, int n, int k, int l, sycl::ext::oneapi::bfloat16 *A, unsigned char *B,
     float *absmax, float *datatype, float *out, int lda,
     int ldb, int ldc, int blocksize, sycl::queue *stream);
