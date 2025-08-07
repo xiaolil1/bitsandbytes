@@ -74,10 +74,14 @@ def _gemv_4bit_impl(
     blocksize: int,
     out: torch.Tensor,
 ) -> None:
+    #import pdb
     m = ct.c_int32(A.shape[-2])#ct.c_int32(1)
     n = ct.c_int32(shapeB[0])
     k = ct.c_int32(shapeB[1])
-    #import pdb
+    l = 1
+    #pdb.set_trace()
+    if A.dim() == 3:
+      l = A.shape[0]
     lda = m
     ldb = ct.c_int32((A.shape[-1] + 1) // 2)
     ldc = m
@@ -106,6 +110,7 @@ def _gemv_4bit_impl(
             m,
             n,
             k,
+            l,
             get_ptr(A),
             get_ptr(B),
             get_ptr(absmax),

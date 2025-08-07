@@ -163,7 +163,7 @@ public:
   };
 
   struct Params {
-    int m, n, k;
+    int m, n, k, l;
     T* A;
     uint8_t* B;
     float* out;
@@ -278,7 +278,7 @@ public:
     int M = params.m;
     int N = params.n;
     int K = params.k;
-    int L = 1;
+    int L = params.l;
     
     //Total Threads number
     static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K; //32 //2
@@ -336,7 +336,7 @@ public:
     Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L)); //coordinate tensor: 0,1,2....
   
     Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
-    Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,l_coord));		
+    Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,0));		
   
 //// Allocate the tiled_mma and the accumulators for the (M,N) subgroup_tile_shape
     TiledMma tiled_mma;
@@ -401,7 +401,7 @@ public:
     auto thr_vmnk = thr_mma.thr_vmnk_;
     int S_offset = get<2>(thr_vmnk)*SG_QNT_WIDTH;
     auto tSgS = [&](){
-        return make_tensor(make_inttuple_iter(make_coord(n_coord * BLK_N + S_offset, 0, l_coord)),
+        return make_tensor(make_inttuple_iter(make_coord(n_coord * BLK_N + S_offset, 0, 0)),
                           make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, _1{}, k_tile_count/k_reload_factor),
                                       make_stride(E<0>{}*_16{}, E<0>{}*_16{}, _0{}, E<1>{}*_1{})));
       
@@ -421,7 +421,7 @@ public:
     //}
 #if 0
   #define PRINT(x) print(#x ": "); print(x); print("\n");
-    if (thread_idx==16 && n_coord == 0) { //)(cutlass::thread(LOG_THREAD, LOG_GROUP)) {
+    if (thread_idx==16 && n_coord == 0 && l_coord==1) { //)(cutlass::thread(LOG_THREAD, LOG_GROUP)) {
         print("\n\n======================= A: \n");
         print("  gA   : "); print(gA);   print("\n");
         print("  tCgA : "); print(tCgA); print("\n");
@@ -578,7 +578,7 @@ printf("\n");
 };
 
 template <typename T, int BITS>
-void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned char *B,
+void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, int l, T *A, unsigned char *B,
                          float *absmax_, float *datatype, float *out, int lda,
                          int ldb, int ldc, int blocksize, sycl::queue *stream) {
   ////std::cout<<"this is gemm_4bit_inference_cutlass_dequant ......................!!!!!!\n";
@@ -599,7 +599,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
 
   //static constexpr int smem_size= 512; // (16 * 32) for quant_map
   static constexpr int smem_size= 256; // (16 * 16) for quant_map
-  int l = 1;
+  //int l = 1;
 
   auto problem_size = ProblemShape{m, n, k, l};
 
@@ -610,6 +610,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   params.m = m;
   params.n = n;
   params.k = k;
+  params.l = l;
   params.A = A;
   params.B = B;
   params.out = out;
@@ -629,9 +630,9 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
   params.tiled_copy_b = tiled_copy_b;
 
   const int scale_k = cute::ceil_div(k, blocksize);
-  StrideScale stride_S = cutlass::make_cute_packed_stride(StrideScale{}, cute::make_shape(n, scale_k, l));
+  StrideScale stride_S = cutlass::make_cute_packed_stride(StrideScale{}, cute::make_shape(n, scale_k, 1));
   //std::cout<<"m = "<<m<<" n = "<<n<<" k = "<<k<<" blocksize = "<<blocksize<<" scale_k = "<<scale_k<<std::endl;
-  auto mScale = make_tensor(make_gmem_ptr(absmax_), make_layout(make_shape(n, scale_k, l), stride_S));
+  auto mScale = make_tensor(make_gmem_ptr(absmax_), make_layout(make_shape(n, scale_k, 1), stride_S));
   Copy_Scale tiled_copy_scale{Copy_Scale{}.with(mScale)};
 
   params.tiled_copy_scale = tiled_copy_scale;
@@ -701,7 +702,7 @@ void gemm_4bit_inference_cutlass_dequant(int m, int n, int k, T *A, unsigned cha
 }
 
 template void gemm_4bit_inference_cutlass_dequant<sycl::ext::oneapi::bfloat16, 16>(
-    int m, int n, int k, sycl::ext::oneapi::bfloat16 *A, unsigned char *B,
+    int m, int n, int k, int l, sycl::ext::oneapi::bfloat16 *A, unsigned char *B,
     float *absmax, float *datatype, float *out, int lda,
     int ldb, int ldc, int blocksize, sycl::queue *stream);
 
