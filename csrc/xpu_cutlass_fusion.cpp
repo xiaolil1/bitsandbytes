@@ -52,10 +52,18 @@ using ElementOutput = float;
 
 using ProblemShape = Shape<int, int, int, int>;
 
+#if 1
 using TileShape = Shape<_256, _256, _32>;
+//using TileShape = Shape<_128, _256, _32>;
 using TiledMma =
       typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                     Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+#else
+  using TileShape = Shape<_16, _64, _64>;
+  using TiledMma =
+      typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
+                                    Layout<Shape<_1, _2, _1>, Stride<_2, _1, _0>>>::TiledMMA;
+#endif
 
 using WorkgroupTileShape = TileShape;
 static constexpr auto BLK_M = get<0>(WorkgroupTileShape{}); //256 //16
@@ -204,8 +212,7 @@ public:
     Tensor<EngineIn, LayoutIn> const& in, 
     Tensor<EngineOut, LayoutOut>& out,
     Tensor<EngineScales, LayoutScales>& tCrS_input,
-    T* quant_map,
-    int n_coord, int thread_idx, int k_start_idx, int k_s, int k_reload_factor, int s_idx
+    T* quant_map
   ) {
     static_assert(is_rmem<EngineIn>::value, "Input tensor for A conversion must come from registers");
     static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
@@ -243,13 +250,9 @@ public:
         auto& dst = *(cute::array<DstType, vec_size>*)(d_tensor(_, s, n).data());
 
         CUTLASS_PRAGMA_UNROLL
-        for (int i = 0; i < vec_size; i++) {
-          uint8_t value = (format_data >> (src_bits * i)) & 0xf;
-          if(i % 2 != 0) { //1,3, high_4bit
-            dst[i-1] = static_cast<DstType>(quant_map[value] * ts);
-          } else {
-            dst[i+1] = static_cast<DstType>(quant_map[value] * ts);          
-          }
+        for (int i = 0; i < vec_size/2; i++) {
+          dst[i * 2] = static_cast<DstType>(quant_map[(format_data >> (src_bits * (i * 2 + 1))) & 0xf] * ts);
+          dst[i * 2 + 1] = static_cast<DstType>(quant_map[(format_data >> (src_bits * (i * 2))) & 0xf] * ts);
         }
       }
     }
@@ -280,7 +283,7 @@ public:
     if (thread_idx < 16) {
       quant_map[thread_idx] = T(datatype[thread_idx]);
     }
-    barrier_wait(1);
+    barrier_arrive(3);
 
     auto blk_shape = TileShape{};
     int m_coord, n_coord, l_coord;
@@ -362,7 +365,7 @@ public:
     }();
 
 #if 0
-  if (thread_idx==16 && n_coord == 0 && l_coord==1) {
+  if (thread_idx==0 && n_coord == 0 && l_coord==0) {
       print("\n\n======================= A: \n");
       print("  gA   : "); print(gA);   print("\n");
       print("  tCgA : "); print(tCgA); print("\n");
@@ -423,7 +426,7 @@ public:
     }
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++, k_s++) {
-      barrier_arrive(2);
+      //barrier_arrive(3);
 
       copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
@@ -438,11 +441,11 @@ public:
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
 
-      dequant(dequant_frag, mma_B, fragment_scale, quant_map, n_coord, thread_idx, k_start_idx, k_s, k_reload_factor, s_idx);
+      dequant(dequant_frag, mma_B, fragment_scale, quant_map);
 
 
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
-      barrier_wait(2);
+      barrier_wait(3);
     }
 	
     SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>((char*)nullptr);
@@ -467,7 +470,7 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
 
   using GemmKernel = gemm_4bit_cutlass_kernel<T, BITS>;
 
-  static constexpr int smem_size= 256; 
+  static constexpr int smem_size= 16*16/2; 
 
   auto problem_size = ProblemShape{m, n, k, l};
 

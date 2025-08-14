@@ -306,6 +306,7 @@ class TestXPU:
             #pdb.set_trace()
             C2 = F.gemv_4bit(A, qB.t(), state=state)
             #print("C2[0] = ", C2[0])
+            #pdb.set_trace()
             #A.requires_grad = True
             C1 = bnb.matmul_4bit(A, qB.t(), state)
             #pdb.set_trace()
