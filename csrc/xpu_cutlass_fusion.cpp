@@ -212,7 +212,7 @@ public:
     Tensor<EngineIn, LayoutIn> const& in, 
     Tensor<EngineOut, LayoutOut>& out,
     Tensor<EngineScales, LayoutScales>& tCrS_input,
-    T* quant_map
+    float* quant_map
   ) {
     static_assert(is_rmem<EngineIn>::value, "Input tensor for A conversion must come from registers");
     static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
@@ -224,7 +224,7 @@ public:
 
     static constexpr auto N = decltype(size<1>(in))::value;
 
-    using format_type = ushort; //16
+    using format_type = int; //16
     static constexpr auto src_bits = sizeof_bits_v<SrcType>; //4
     static constexpr auto scalar = sizeof_bits_v<format_type> / src_bits; // 4
     static constexpr auto loop_cnt = decltype(size(out))::value / N; // 128 / 2 = 64
@@ -239,7 +239,7 @@ public:
 
     CUTLASS_PRAGMA_UNROLL
     for (int n = 0; n < N; n++) {
-      DstType ts = static_cast<DstType>(tCrS_input(n));
+      float ts = tCrS_input(n);
       auto& src = *(cute::array<format_type, loop_cnt / scalar>*)(s_tensor(_, n).data());
 
       CUTLASS_PRAGMA_UNROLL
@@ -251,6 +251,8 @@ public:
 
         CUTLASS_PRAGMA_UNROLL
         for (int i = 0; i < vec_size/2; i++) {
+          //dst[i * 2] = static_cast<DstType>(1.0f * ts);
+          //dst[i * 2 + 1] = static_cast<DstType>(1.0f * ts);
           dst[i * 2] = static_cast<DstType>(quant_map[(format_data >> (src_bits * (i * 2 + 1))) & 0xf] * ts);
           dst[i * 2 + 1] = static_cast<DstType>(quant_map[(format_data >> (src_bits * (i * 2))) & 0xf] * ts);
         }
@@ -279,9 +281,9 @@ public:
 
     int thread_idx = int(ThreadIdxX());
     // Load Dequatize LUT and save to SLM, 16 for 4bits
-    T* quant_map = reinterpret_cast<T*>(smem_buf);
+    float* quant_map = reinterpret_cast<float*>(smem_buf);
     if (thread_idx < 16) {
-      quant_map[thread_idx] = T(datatype[thread_idx]);
+      quant_map[thread_idx] = datatype[thread_idx];
     }
     barrier_arrive(3);
 
@@ -301,7 +303,7 @@ public:
     constexpr auto subgroup_tile_shape = SubgroupTileShape{}; 
   
     Tensor mA_mkl = cute::get_pvc_tensor(make_shape(M,K,L));
-    Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L));
+    Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,1));
   
     Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
     Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,0));		
@@ -426,7 +428,6 @@ public:
     }
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++, k_s++) {
-      //barrier_arrive(3);
 
       copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
@@ -434,15 +435,12 @@ public:
       const int s_idx = (k_start_idx + k_s) / k_reload_factor;
       copy(tiled_copy_scale, tSgS(_, _, _, s_idx), frag_copy_Scale);
 
-      if(prefetch_k < k_tile_count) {
-        prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
-      }
-      if(prefetch_k < k_tile_count) {
-        prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
-      }
-
       dequant(dequant_frag, mma_B, fragment_scale, quant_map);
 
+      if(prefetch_k < k_tile_count) {
+        prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
+        prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
+      }
 
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
       barrier_wait(3);
@@ -470,7 +468,7 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
 
   using GemmKernel = gemm_4bit_cutlass_kernel<T, BITS>;
 
-  static constexpr int smem_size= 16*16/2; 
+  static constexpr int smem_size= 16*32/8; 
 
   auto problem_size = ProblemShape{m, n, k, l};
 

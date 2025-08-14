@@ -74,20 +74,15 @@ def _gemv_4bit_impl(
     blocksize: int,
     out: torch.Tensor,
 ) -> None:
-    #import pdb
     m = ct.c_int32(A.shape[-2])#ct.c_int32(1)
     n = ct.c_int32(shapeB[0])
     k = ct.c_int32(shapeB[1])
-    l = 1
-    #pdb.set_trace()
-    if A.dim() == 3:
-      l = A.shape[0]
+    l = A.shape[0] if A.dim() == 3 else 1
+
     lda = m
     ldb = ct.c_int32((A.shape[-1] + 1) // 2)
     ldc = m
-    #pdb.set_trace()
     absmax = absmax.view(shapeB[0],int(shapeB[1]/blocksize)).transpose(0,1).contiguous()
-    #pdb.set_trace()
     stream = _get_tensor_stream(A)
     if A.dtype == torch.float16:
         lib.cgemv_4bit_inference_fp16(
