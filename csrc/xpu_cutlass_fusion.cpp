@@ -52,8 +52,9 @@ using ElementOutput = float;
 
 using ProblemShape = Shape<int, int, int, int>;
 
-#if 1
+#if 0
 using TileShape = Shape<_256, _256, _32>;
+//using TileShape = Shape<_128, _128, _32>;
 //using TileShape = Shape<_128, _256, _32>;
 using TiledMma =
       typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
@@ -90,7 +91,7 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}); //8*4*1*16=512 //1*2*1*16=32
 
 // Define Mainloop dispatch policy
-constexpr int PipelineStages = 2;
+constexpr int PipelineStages = 4;
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
 static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // 16 
 
@@ -129,7 +130,8 @@ using ClusterShape = typename DispatchPolicy::ClusterShape;
 using CopyThreadShape = Shape<_1, Int<SubgroupSize>>;
 using CopyThreadShapeRev = decltype(cute::reverse(CopyThreadShape{}));
 
-using GmemTiledCopyA = XE_2D_U16x32x32_LD_N; //XE_2D_U16x16x32_LD_N;
+//using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
+using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
 using StrideA = cutlass::gemm::TagToStrideA_t<cutlass::layout::RowMajor>;
 using traits_load_A = Copy_Traits<GmemTiledCopyA, StrideA>;
 using atom_load_A = Copy_Atom<traits_load_A, ElementA>;
@@ -367,7 +369,7 @@ public:
     }();
 
 #if 0
-  if (thread_idx==0 && n_coord == 0 && l_coord==0) {
+  if (cute::thread0()){ //thread_idx==0 && n_coord == 0 && l_coord==0) {
       print("\n\n======================= A: \n");
       print("  gA   : "); print(gA);   print("\n");
       print("  tCgA : "); print(tCgA); print("\n");
@@ -428,7 +430,6 @@ public:
     }
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++, k_s++) {
-
       copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
 
@@ -457,7 +458,7 @@ public:
       tiled_mma,
       thread_idx
     );
-  }    
+  }
 };
 
 template <typename T, int BITS>
