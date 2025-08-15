@@ -214,7 +214,7 @@ public:
     Tensor<EngineIn, LayoutIn> const& in, 
     Tensor<EngineOut, LayoutOut>& out,
     Tensor<EngineScales, LayoutScales>& tCrS_input,
-    float* quant_map
+    const float* quant_map
   ) {
     static_assert(is_rmem<EngineIn>::value, "Input tensor for A conversion must come from registers");
     static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
@@ -226,18 +226,73 @@ public:
 
     static constexpr auto N = decltype(size<1>(in))::value;
 
-    using format_type = int; //16
+#if 0
+#if 1
+    //using format_type = int; //32
+    static constexpr auto vec_size = decltype(size(out))::value / N / 2; // 128 / 2 / 2 = 64
+    using format_type = std::array<unsigned char, vec_size>; //<unsigned char, 64>
+    static constexpr auto src_bits = sizeof_bits_v<SrcType>; //8
+
+    auto s_tensor = make_tensor((format_type*)(raw_pointer_cast(in.data())), Shape<Int<N>>{});
+    auto d_tensor = make_tensor(out.data(), Shape<Int<vec_size * 2>, Int<N>>{});
+
+//if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, src_bits = %d, vec_size = %d\n", decltype(size(out))::value, N, src_bits, vec_size);
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int n = 0; n < N; n++) {
+      float ts = tCrS_input(n);
+      auto& src = *(cute::array<unsigned char, vec_size>*)(s_tensor(n).data());
+      auto& dst = *(cute::array<DstType, vec_size * 2>*)(d_tensor(_, n).data());
+
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < vec_size; i++) {
+        dst[i * 2] = static_cast<DstType>(1.0f * ts);
+        dst[i * 2 + 1] = static_cast<DstType>(1.0f * ts);
+        //dst[i * 2] = static_cast<DstType>(quant_map[(src[i] >> src_bits)] * ts);
+        //dst[i * 2 + 1] = static_cast<DstType>(quant_map[(src[i] & 0xf)] * ts);
+      }
+    }
+#else
+    //using format_type = int; //32
+    static constexpr auto vec_size = decltype(size(out))::value / N / 2; // 128 / 2 / 2 = 64
+    using format_type = std::array<unsigned char, vec_size>; //<unsigned char, 64>
+    static constexpr auto src_bits = sizeof_bits_v<SrcType>; //8
+
+    auto s_tensor = make_tensor((format_type*)(raw_pointer_cast(in.data())), Shape<Int<N>>{});
+    auto d_tensor = make_tensor(out.data(), Shape<Int<vec_size * 2>, Int<N>>{});
+
+//if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, src_bits = %d, vec_size = %d\n", decltype(size(out))::value, N, src_bits, vec_size);
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int n = 0; n < N; n++) {
+      float ts = tCrS_input(n);
+      auto& src = *(cute::array<unsigned char, vec_size>*)(s_tensor(n).data());
+      auto& dst = *(cute::array<DstType, vec_size * 2>*)(d_tensor(_, n).data());
+
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < vec_size; i++) {
+        //dst[i * 2] = static_cast<DstType>(1.0f * ts);
+        //dst[i * 2 + 1] = static_cast<DstType>(1.0f * ts);
+        dst[i * 2] = static_cast<DstType>(quant_map[(src[i] >> src_bits)] * ts);
+        dst[i * 2 + 1] = static_cast<DstType>(quant_map[(src[i] & 0xf)] * ts);
+      }
+    }
+#endif
+#else
+    using format_type = int; //32
     static constexpr auto src_bits = sizeof_bits_v<SrcType>; //4
-    static constexpr auto scalar = sizeof_bits_v<format_type> / src_bits; // 4
+    static constexpr auto scalar = sizeof_bits_v<format_type> / src_bits; // 8
     static constexpr auto loop_cnt = decltype(size(out))::value / N; // 128 / 2 = 64
     static_assert((scalar % N) == 0);
 
-    static constexpr auto vec_size = scalar;
-    static constexpr auto splits = loop_cnt / vec_size; // 64 / 4 = 16
+    static constexpr auto vec_size = scalar; //8
+    static constexpr auto splits = loop_cnt / vec_size; // 64 / 8 = 8
     static_assert(vec_size <= scalar);
 
     auto s_tensor = make_tensor((format_type*)(raw_pointer_cast(in.data())), Shape<Int<loop_cnt / scalar>, Int<N>>{});
     auto d_tensor = make_tensor(out.data(), Shape<Int<vec_size>, Int<splits>, Int<N>>{});
+
+//if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, src_bits = %d, scalar = %d, loop_cnt = %d, vec_size = %d, splits = %d\n", decltype(size(out))::value, N, src_bits, scalar, loop_cnt, vec_size, splits);
 
     CUTLASS_PRAGMA_UNROLL
     for (int n = 0; n < N; n++) {
@@ -253,13 +308,17 @@ public:
 
         CUTLASS_PRAGMA_UNROLL
         for (int i = 0; i < vec_size/2; i++) {
-          //dst[i * 2] = static_cast<DstType>(1.0f * ts);
-          //dst[i * 2 + 1] = static_cast<DstType>(1.0f * ts);
+#if 1          
+          dst[i * 2] = static_cast<DstType>(1.0f * ts);
+          dst[i * 2 + 1] = static_cast<DstType>(1.0f * ts);
+#else          
           dst[i * 2] = static_cast<DstType>(quant_map[(format_data >> (src_bits * (i * 2 + 1))) & 0xf] * ts);
           dst[i * 2 + 1] = static_cast<DstType>(quant_map[(format_data >> (src_bits * (i * 2))) & 0xf] * ts);
+#endif          
         }
       }
     }
+#endif     
   }
   
   CUTLASS_DEVICE
@@ -283,12 +342,19 @@ public:
 
     int thread_idx = int(ThreadIdxX());
     // Load Dequatize LUT and save to SLM, 16 for 4bits
+#if 0
+    float quant_map[16];
+    CUTLASS_PRAGMA_UNROLL
+    for(int i=0; i<16; i++){
+      quant_map[i] = datatype[i];
+    }
+#else    
     float* quant_map = reinterpret_cast<float*>(smem_buf);
     if (thread_idx < 16) {
       quant_map[thread_idx] = datatype[thread_idx];
     }
     barrier_arrive(3);
-
+#endif
     auto blk_shape = TileShape{};
     int m_coord, n_coord, l_coord;
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
