@@ -36,7 +36,8 @@ using namespace cutlass::gemm;
 
 // Define Basic information 
 //Weight-only-quant (B)
-using MmaType = sycl::ext::oneapi::bfloat16; //cutlass::bfloat16_t;
+//using MmaType = sycl::ext::oneapi::bfloat16;
+using MmaType = cutlass::bfloat16_t;
 using QuantType = cutlass::uint4_t; //NF4,FP4
 
 using ElementA = MmaType;
@@ -130,8 +131,11 @@ using ClusterShape = typename DispatchPolicy::ClusterShape;
 using CopyThreadShape = Shape<_1, Int<SubgroupSize>>;
 using CopyThreadShapeRev = decltype(cute::reverse(CopyThreadShape{}));
 
-//using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
+#if 0
+using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
+#else
 using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
+#endif
 using StrideA = cutlass::gemm::TagToStrideA_t<cutlass::layout::RowMajor>;
 using traits_load_A = Copy_Traits<GmemTiledCopyA, StrideA>;
 using atom_load_A = Copy_Atom<traits_load_A, ElementA>;
@@ -279,7 +283,7 @@ public:
     }
 #endif
 #else
-    using format_type = int; //32
+    using format_type = uint32_t; //32
     static constexpr auto src_bits = sizeof_bits_v<SrcType>; //4
     static constexpr auto scalar = sizeof_bits_v<format_type> / src_bits; // 8
     static constexpr auto loop_cnt = decltype(size(out))::value / N; // 128 / 2 = 64
@@ -308,12 +312,14 @@ public:
 
         CUTLASS_PRAGMA_UNROLL
         for (int i = 0; i < vec_size/2; i++) {
-#if 1          
+#if 0          
           dst[i * 2] = static_cast<DstType>(1.0f * ts);
           dst[i * 2 + 1] = static_cast<DstType>(1.0f * ts);
 #else          
           dst[i * 2] = static_cast<DstType>(quant_map[(format_data >> (src_bits * (i * 2 + 1))) & 0xf] * ts);
           dst[i * 2 + 1] = static_cast<DstType>(quant_map[(format_data >> (src_bits * (i * 2))) & 0xf] * ts);
+          //dst[i * 2] = quant_map[(format_data >> (src_bits * (i * 2 + 1))) & 0xf] * ts;
+          //dst[i * 2 + 1] = quant_map[(format_data >> (src_bits * (i * 2))) & 0xf] * ts;
 #endif          
         }
       }
