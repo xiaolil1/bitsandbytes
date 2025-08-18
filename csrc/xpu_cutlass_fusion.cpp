@@ -53,7 +53,11 @@ using ElementOutput = float;
 
 using ProblemShape = Shape<int, int, int, int>;
 
-#if 0
+#ifndef METHOD
+#define METHOD 2
+#endif 
+
+#if METHOD == 1
 using TileShape = Shape<_256, _256, _32>;
 //using TileShape = Shape<_128, _128, _32>;
 //using TileShape = Shape<_128, _256, _32>;
@@ -92,7 +96,11 @@ static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}); //8*4*1*16=512 //1*2*1*16=32
 
 // Define Mainloop dispatch policy
+#if METHOD == 1
+constexpr int PipelineStages = 2;
+#else
 constexpr int PipelineStages = 4;
+#endif
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
 static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // 16 
 
@@ -131,7 +139,7 @@ using ClusterShape = typename DispatchPolicy::ClusterShape;
 using CopyThreadShape = Shape<_1, Int<SubgroupSize>>;
 using CopyThreadShapeRev = decltype(cute::reverse(CopyThreadShape{}));
 
-#if 0
+#if METHOD == 1
 using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
 #else
 using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
@@ -284,21 +292,21 @@ CUTLASS_DEVICE void dequant(
     static constexpr auto N = decltype(size<1>(in))::value;
     static constexpr auto K = decltype(size(out))::value / N;
 
-    using compress_type = uint32_t;
+    using compress_type = ushort; //uint32_t;
     static constexpr auto compress_size = sizeof_bits_v<compress_type> / sizeof_bits_v<SrcType>;
     static_assert((compress_size % N) == 0);
 
-    static constexpr auto vec_size = 2;
+    static constexpr auto vec_size = 4;
     //using VecSrcElemType = cute::array<SrcType, compress_size>;
     using VecSrcType = cute::array<compress_type, vec_size>; //sycl::vec<uint32_t, 4>;
     using VecDstElemType = cute::array<DstType, compress_size>;
     using VecDstType = cute::array<VecDstElemType, vec_size>;
 
     // 预定义掩码和位移
-    //constexpr uint32_t MASK_HIGH[4] = {0xF0, 0xF000, 0xF00000, 0xF0000000};
-    //constexpr uint32_t MASK_LOW[4]  = {0xF, 0xF00, 0xF0000, 0xF000000};
-    //constexpr int SHIFT_HIGH[4] = {4, 12, 20, 28};
-    //constexpr int SHIFT_LOW[4]  = {0, 8, 16, 24};
+    constexpr uint32_t MASK_HIGH[4] = {0xF0, 0xF000, 0xF00000, 0xF0000000};
+    constexpr uint32_t MASK_LOW[4]  = {0xF, 0xF00, 0xF0000, 0xF000000};
+    constexpr int SHIFT_HIGH[4] = {4, 12, 20, 28};
+    constexpr int SHIFT_LOW[4]  = {0, 8, 16, 24};
 
     auto s_tensor = make_tensor((VecSrcType*)(raw_pointer_cast(in.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
     auto d_tensor = make_tensor((VecDstType*)(raw_pointer_cast(out.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
@@ -312,21 +320,26 @@ CUTLASS_DEVICE void dequant(
         #pragma unroll
         for (int k = 0; k < K / (compress_size * vec_size); k++) {
             VecSrcType src_val = src[k];
-            VecDstType dst_val;// = dst[k];
+            //VecDstType& dst_val = dst[k];
+            VecDstType dst_val;
 
             #pragma unroll
             for (int i = 0; i < vec_size; i++) {
                 compress_type compressed_val = src_val[i];
-                VecDstElemType compressed_dst_val;// = dst_val[i];
+                //VecDstElemType& dst_elem = dst_val[i];
+                VecDstElemType dst_elem;
 
                 #pragma unroll
                 for (int j = 0; j < compress_size / 2; j++) {
-                    //uint8_t high = (compressed_val & MASK_HIGH[j]) >> SHIFT_HIGH[j];
-                    //uint8_t low  = (compressed_val & MASK_LOW[j]) >> SHIFT_LOW[j];
-                    compressed_dst_val[2*j]   = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2 + 1))) & 0xf] * ts);
-                    compressed_dst_val[2*j+1] = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2))) & 0xf] * ts);
+                //for (int j = 0; j < 4; j++) {
+                    uint8_t high = (compressed_val & MASK_HIGH[j]) >> SHIFT_HIGH[j];
+                    uint8_t low  = (compressed_val & MASK_LOW[j]) >> SHIFT_LOW[j];
+                    dst_elem[2 * j]   = static_cast<DstType>(quant_map[high] * ts);
+                    dst_elem[2 * j + 1]   = static_cast<DstType>(quant_map[low] * ts);
+                    //dst_elem[2*j]   = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2 + 1))) & 0xf] * ts);
+                    //dst_elem[2*j+1] = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2))) & 0xf] * ts);
                 }
-                dst_val[i] = compressed_dst_val; 
+                dst_val[i] = dst_elem;
             }
             dst[k] = dst_val;
         }
