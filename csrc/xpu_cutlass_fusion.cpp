@@ -284,27 +284,34 @@ public:
 #endif
 #else
 #if 1    
-    using format_type = uint32_t; //32
-    static constexpr auto compress_ratio = sizeof_bits_v<format_type> / sizeof_bits_v<SrcType>; // 8
     static constexpr auto K = decltype(size(out))::value / N; // 128 / 2 = 64
-    static_assert((compress_ratio % N) == 0);
 
-    auto s_tensor = make_tensor((format_type*)(raw_pointer_cast(in.data())), Shape<Int<K / compress_ratio>, Int<N>>{});
+    using compress_type = uint8_t;
+    using vec_type = uint8_t;
+
+    static constexpr auto compress_size = sizeof_bits_v<compress_type> / sizeof_bits_v<SrcType>;
+    static_assert((compress_size % N) == 0);
+
+    static constexpr auto vec_num = sizeof_bits_v<vec_type> / sizeof_bits_v<compress_type>;
+    static constexpr auto vec_size = compress_size * vec_num;
+
+    auto s_tensor = make_tensor((vec_type*)(raw_pointer_cast(in.data())), Shape<Int<K / vec_size>, Int<N>>{});
     auto d_tensor = make_tensor(out.data(), Shape<Int<K>, Int<N>>{});
 
-    CUTLASS_PRAGMA_UNROLL
+    #pragma unroll
     for (int n = 0; n < N; n++) {
       float ts = tCrS_input(n);
-      auto& src = *(cute::array<format_type, K / compress_ratio>*)(s_tensor(_, n).data());
+      auto& src = *(cute::array<compress_type, K / compress_size>*)(s_tensor(_, n).data());
       auto& dst = *(cute::array<DstType, K>*)(d_tensor(_, n).data());
 
-      CUTLASS_PRAGMA_UNROLL
-      for (int s = 0; s < K / compress_ratio; s++) {
+      #pragma unroll
+      for (int s = 0; s < K / compress_size; s++) {
 
-        CUTLASS_PRAGMA_UNROLL
-        for (int i = 0; i < compress_ratio/2; i++) {
-          dst[s * compress_ratio + i * 2] = static_cast<DstType>(quant_map[(src[s] >> (4 * (i * 2 + 1))) & 0xf] * ts);
-          dst[s * compress_ratio + i * 2 + 1] = static_cast<DstType>(quant_map[(src[s] >> (4 * (i * 2))) & 0xf] * ts);
+        #pragma unroll
+        for(int i = 0; i < compress_size / 2; i++) {
+          int dst_offset = s * compress_size + i * 2;
+          dst[dst_offset] = static_cast<DstType>(quant_map[(src[s] >> (4 * (i * 2 + 1))) & 0xf] * ts);
+          dst[dst_offset + 1] = static_cast<DstType>(quant_map[(src[s] >> (4 * (i * 2))) & 0xf] * ts);
         }
       }
     }
