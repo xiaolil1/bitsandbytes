@@ -286,7 +286,7 @@ public:
 #if 1    
     static constexpr auto K = decltype(size(out))::value / N; // 128 / 2 = 64
 
-    using compress_type = uint8_t;
+    using compress_type = uint32_t;
     using vec_type = uint32_t;
 
     static constexpr auto compress_size = sizeof_bits_v<compress_type> / sizeof_bits_v<SrcType>;
@@ -303,27 +303,31 @@ public:
       float ts = tCrS_input(n);
       auto& src = *(cute::array<compress_type, K / compress_size>*)(s_tensor(_, n).data());
       auto& dst = *(cute::array<DstType, K>*)(d_tensor(_, n).data());
-      int iter_num = 4;
 
+#if 1
       #pragma unroll
-      for (int s = 0; s < K / compress_size / iter_num; s++) {
+      for (int s = 0; s < K / compress_size; s++) {
 
-#if 0
         #pragma unroll
         for(int i = 0; i < compress_size / 2; i++) {
           int dst_offset = s * compress_size + i * 2;
           dst[dst_offset] = static_cast<DstType>(quant_map[(src[s] >> (4 * (i * 2 + 1))) & 0xf] * ts);
           dst[dst_offset + 1] = static_cast<DstType>(quant_map[(src[s] >> (4 * (i * 2))) & 0xf] * ts);
         }
+      }
 #else
+      int iter_num = 4;
+      #pragma unroll
+      for (int s = 0; s < K / compress_size / iter_num; s++) {
+
         #pragma unroll
         for(int i = 0; i < iter_num * compress_size / 2; i++) {
           int dst_offset = s * iter_num * compress_size + i * 2;
           dst[dst_offset] = static_cast<DstType>(quant_map[src[s * iter_num + i] >> 4] * ts);
           dst[dst_offset + 1] = static_cast<DstType>(quant_map[src[s * iter_num  + i] & 0xf] * ts);
         }
-#endif        
       }
+#endif        
     }
 #else    
     using compress_type = uint8_t;
