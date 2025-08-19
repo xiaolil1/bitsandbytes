@@ -213,159 +213,70 @@ public:
     }
   }
 
-#if 0
   template <class EngineIn,
-            class EngineOut, 
-            class EngineScales, 
-            class LayoutIn,
-            class LayoutOut,
-            class LayoutScales,
-            class... Ts>
-  CUTLASS_DEVICE
-  void dequant(
-    Tensor<EngineIn, LayoutIn> const& in, 
-    Tensor<EngineOut, LayoutOut>& out,
-    Tensor<EngineScales, LayoutScales>& tCrS_input,
-    const float* quant_map
+          class EngineOut,
+          class EngineScales,
+          class LayoutIn,
+          class LayoutOut,
+          class LayoutScales,
+          class... Ts>
+  CUTLASS_DEVICE void dequant(
+      Tensor<EngineIn, LayoutIn> const& in,
+      Tensor<EngineOut, LayoutOut>& out,
+      Tensor<EngineScales, LayoutScales>& tCrS_input,
+      const float* quant_map
   ) {
-    static_assert(is_rmem<EngineIn>::value, "Input tensor for A conversion must come from registers");
-    static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
-    static_assert(size_v<LayoutOut> == cosize_v<LayoutOut>);
-
-    using SrcType = typename EngineIn::value_type;
-    using DstType = typename EngineOut::value_type;
-    using ScaleType = typename EngineScales::value_type;
-
-    static constexpr auto N = decltype(size<1>(in))::value;
-    static constexpr auto K = decltype(size(out))::value / N; // 128 / 2 = 64
-
-    using compress_type = uint32_t;
-
-    static constexpr auto compress_size = sizeof_bits_v<compress_type> / sizeof_bits_v<SrcType>;
-    static_assert((compress_size % N) == 0);
-
-    auto s_tensor = make_tensor((compress_type*)(raw_pointer_cast(in.data())), Shape<Int<K / compress_size>, Int<N>>{});
-    auto d_tensor = make_tensor(out.data(), Shape<Int<K>, Int<N>>{});
-
-    #pragma unroll
-    for (int n = 0; n < N; n++) {
-      float ts = tCrS_input(n);
-      auto& src = *(cute::array<compress_type, K / compress_size>*)(s_tensor(_, n).data());
-      auto& dst = *(cute::array<DstType, K>*)(d_tensor(_, n).data());
-
-      #pragma unroll
-      for (int s = 0; s < K / compress_size; s++) {
-        compress_type src_val = src[s];
-        #pragma unroll
-        for(int i = 0; i < compress_size / 2; i++) {
-          int dst_offset = s * compress_size + i * 2;
-          uint8_t high = (src_val >> (4 * (i * 2 + 1))) & 0xf;
-          uint8_t low = (src_val >> (4 * (i * 2))) & 0xf;
-          dst[dst_offset] = static_cast<DstType>(quant_map[high] * ts);
-          dst[dst_offset + 1] = static_cast<DstType>(quant_map[low] * ts);
-        }
-      }
-    }
-  }
-#else
-    template <class EngineIn,
-            class EngineOut,
-            class EngineScales,
-            class LayoutIn,
-            class LayoutOut,
-            class LayoutScales,
-            class... Ts>
-CUTLASS_DEVICE void dequant(
-    Tensor<EngineIn, LayoutIn> const& in,
-    Tensor<EngineOut, LayoutOut>& out,
-    Tensor<EngineScales, LayoutScales>& tCrS_input,
-    const float* quant_map
-) {
     static_assert(is_rmem<EngineIn>::value, "Input tensor must be in registers");
     static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
     static_assert(size_v<LayoutOut> == cosize_v<LayoutOut>);
-
+  
     using SrcType = typename EngineIn::value_type;
     using DstType = typename EngineOut::value_type;
     using ScaleType = typename EngineScales::value_type;
-
+  
     static constexpr auto N = decltype(size<1>(in))::value;
     static constexpr auto K = decltype(size(out))::value / N;
-
+  
     using compress_type = uint32_t;
     static constexpr auto compress_size = sizeof_bits_v<compress_type> / sizeof_bits_v<SrcType>;
     static_assert((compress_size % N) == 0);
-
+  
     static constexpr auto vec_size = 8;
-    //using VecSrcElemType = cute::array<SrcType, compress_size>;
-    using VecSrcType = cute::array<compress_type, vec_size>; //sycl::vec<uint32_t, 4>;
+    using VecSrcType = cute::array<compress_type, vec_size>;
     using VecDstElemType = cute::array<DstType, compress_size>;
     using VecDstType = cute::array<VecDstElemType, vec_size>;
-
-    // 预定义掩码和位移
-    constexpr uint32_t MASK_HIGH[4] = {0xF0, 0xF000, 0xF00000, 0xF0000000};
-    constexpr uint32_t MASK_LOW[4]  = {0xF, 0xF00, 0xF0000, 0xF000000};
-    constexpr int SHIFT_HIGH[4] = {4, 12, 20, 28};
-    constexpr int SHIFT_LOW[4]  = {0, 8, 16, 24};
-    constexpr int shifts[8] = {4,0,12,8,20,16,28,24};
-
-    auto s_tensor = make_tensor((VecSrcType*)(raw_pointer_cast(in.data())), Shape<Int<1>, Int<N>>{});
-    auto d_tensor = make_tensor((VecDstType*)(raw_pointer_cast(out.data())), Shape<Int<1>, Int<N>>{});
-
+  
+    auto s_tensor = make_tensor((VecSrcType*)(raw_pointer_cast(in.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
+    auto d_tensor = make_tensor((VecDstType*)(raw_pointer_cast(out.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
+  
     #pragma unroll
     for (int n = 0; n < N; n++) {
-        float ts = tCrS_input(n);
-        auto& src = *(cute::array<VecSrcType, 1>*)(s_tensor(_, n).data());
-        auto& dst = *(cute::array<VecDstType, 1>*)(d_tensor(_, n).data());
-#if 0
-       const auto src_val = src[0];
-       VecDstType dst_val;
-       #pragma unroll
-       for (int i = 0; i < vec_size; ++i) {
-           const compress_type val = src_val[i];
-           VecDstElemType dst_elem;
-           dst_elem[0] = static_cast<DstType>(quant_map[(val>>shifts[0])&0xF] * ts);
-           dst_elem[1] = static_cast<DstType>(quant_map[(val>>shifts[1])&0xF] * ts);
-           dst_elem[2] = static_cast<DstType>(quant_map[(val>>shifts[2])&0xF] * ts);
-           dst_elem[3] = static_cast<DstType>(quant_map[(val>>shifts[3])&0xF] * ts);
-           dst_elem[4] = static_cast<DstType>(quant_map[(val>>shifts[4])&0xF] * ts);
-           dst_elem[5] = static_cast<DstType>(quant_map[(val>>shifts[5])&0xF] * ts);
-           dst_elem[6] = static_cast<DstType>(quant_map[(val>>shifts[6])&0xF] * ts);
-           dst_elem[7] = static_cast<DstType>(quant_map[(val>>shifts[7])&0xF] * ts);
-           dst_val[i] = dst_elem;
-       }
-       dst[0] = dst_val;
-#else
+      float ts = tCrS_input(n);
+      auto& src = *(cute::array<VecSrcType, K / (compress_size * vec_size)>*)(s_tensor(_, n).data());
+      auto& dst = *(cute::array<VecDstType, K / (compress_size * vec_size)>*)(d_tensor(_, n).data());
+  
+      #pragma unroll
+      for (int k = 0; k < K / (compress_size * vec_size); k++) {
+        VecSrcType src_val = src[k];
+        VecDstType dst_val;
+  
         #pragma unroll
-        for (int k = 0; k < K / (compress_size * vec_size); k++) {
-            VecSrcType src_val = src[k];
-            //VecDstType& dst_val = dst[k];
-            VecDstType dst_val;
-
-            #pragma unroll
-            for (int i = 0; i < vec_size; i++) {
-                compress_type compressed_val = src_val[i];
-                //VecDstElemType& dst_elem = dst_val[i];
-                VecDstElemType dst_elem;
-
-                #pragma unroll
-                for (int j = 0; j < compress_size / 2; j++) {
-                //for (int j = 0; j < 4; j++) {
-                    //uint8_t high = (compressed_val & MASK_HIGH[j]) >> SHIFT_HIGH[j];
-                    //uint8_t low  = (compressed_val & MASK_LOW[j]) >> SHIFT_LOW[j];
-                    //dst_elem[2 * j]   = static_cast<DstType>(quant_map[high] * ts);
-                    //dst_elem[2 * j + 1]   = static_cast<DstType>(quant_map[low] * ts);
-                    dst_elem[2*j]   = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2 + 1))) & 0xf] * ts);
-                    dst_elem[2*j+1] = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2))) & 0xf] * ts);
-                }
-                dst_val[i] = dst_elem;
-            }
-            dst[k] = dst_val;
+        for (int i = 0; i < vec_size; i++) {
+          compress_type compressed_val = src_val[i];
+          VecDstElemType dst_elem;
+  
+          #pragma unroll
+          for (int j = 0; j < compress_size / 2; j++) {
+              dst_elem[2*j]   = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2 + 1))) & 0xf] * ts);
+              dst_elem[2*j+1] = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2))) & 0xf] * ts);
+          }
+          dst_val[i] = dst_elem;
         }
-#endif        
+        dst[k] = dst_val;
+      }
     }
-}
-#endif
+  }
+
   CUTLASS_DEVICE
   void operator()(Params const& params, char* smem_buf) {
     int M = params.m;
