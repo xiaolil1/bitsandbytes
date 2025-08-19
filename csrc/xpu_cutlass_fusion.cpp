@@ -69,11 +69,11 @@ using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
 constexpr int PipelineStages = 2;
 
 #else
-  using TileShape = Shape<_16, _64, _64>;
+  using TileShape = Shape<_32, _64, _64>;
   using TiledMma =
       typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                     Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-  using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
+  using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
   constexpr int PipelineStages = 4;
 #endif
 
@@ -255,7 +255,7 @@ public:
     auto s_tensor = make_tensor((VecSrcType*)(raw_pointer_cast(in.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
     auto d_tensor = make_tensor((VecDstType*)(raw_pointer_cast(out.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
  
- if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, compress_size = %d, vec_size = %d\n", decltype(size(out))::value, N, K, compress_size, vec_size);
+ //if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, compress_size = %d, vec_size = %d\n", decltype(size(out))::value, N, K, compress_size, vec_size);
     #pragma unroll
     for (int n = 0; n < N; n++) {
       float ts = tCrS_input(n);
