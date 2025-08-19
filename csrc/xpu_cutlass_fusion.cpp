@@ -53,22 +53,28 @@ using ElementOutput = float;
 
 using ProblemShape = Shape<int, int, int, int>;
 
-#ifndef METHOD
-#define METHOD 2
-#endif 
-
-#if METHOD == 1
+//#ifndef METHOD
+//#define METHOD 1
+//#endif 
+//
+//#if METHOD == 1
+#if 0
 using TileShape = Shape<_256, _256, _32>;
-//using TileShape = Shape<_128, _128, _32>;
-//using TileShape = Shape<_128, _256, _32>;
 using TiledMma =
       typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                     Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+
+
+using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
+constexpr int PipelineStages = 2;
+
 #else
   using TileShape = Shape<_16, _64, _64>;
   using TiledMma =
       typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-                                    Layout<Shape<_1, _2, _1>, Stride<_2, _1, _0>>>::TiledMMA;
+                                    Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+  using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
+  constexpr int PipelineStages = 4;
 #endif
 
 using WorkgroupTileShape = TileShape;
@@ -95,12 +101,12 @@ static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K; //32 //2
 static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
 static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}); //8*4*1*16=512 //1*2*1*16=32
 
-// Define Mainloop dispatch policy
-#if METHOD == 1
-constexpr int PipelineStages = 2;
-#else
-constexpr int PipelineStages = 4;
-#endif
+//// Define Mainloop dispatch policy
+//#if METHOD == 1
+//constexpr int PipelineStages = 2;
+//#else
+//constexpr int PipelineStages = 4;
+//#endif
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
 static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // 16 
 
@@ -139,11 +145,11 @@ using ClusterShape = typename DispatchPolicy::ClusterShape;
 using CopyThreadShape = Shape<_1, Int<SubgroupSize>>;
 using CopyThreadShapeRev = decltype(cute::reverse(CopyThreadShape{}));
 
-#if METHOD == 1
-using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
-#else
-using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
-#endif
+//#if METHOD == 1
+//using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
+//#else
+//using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
+//#endif
 using StrideA = cutlass::gemm::TagToStrideA_t<cutlass::layout::RowMajor>;
 using traits_load_A = Copy_Traits<GmemTiledCopyA, StrideA>;
 using atom_load_A = Copy_Atom<traits_load_A, ElementA>;
@@ -248,7 +254,8 @@ public:
   
     auto s_tensor = make_tensor((VecSrcType*)(raw_pointer_cast(in.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
     auto d_tensor = make_tensor((VecDstType*)(raw_pointer_cast(out.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
-  
+ 
+ if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, compress_size = %d, vec_size = %d\n", decltype(size(out))::value, N, K, compress_size, vec_size);
     #pragma unroll
     for (int n = 0; n < N; n++) {
       float ts = tCrS_input(n);
