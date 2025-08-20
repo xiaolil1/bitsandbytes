@@ -53,6 +53,14 @@ using ElementOutput = float;
 
 using ProblemShape = Shape<int, int, int, int>;
 
+//constexpr int kQuantMapSize = 16;
+static constexpr float quant_map[16] = {
+    -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
+    -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
+    0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
+    0.44070983f, 0.562617f, 0.72295684f, 1.0f
+};
+
 //#ifndef METHOD
 //#define METHOD 1
 //#endif 
@@ -69,10 +77,10 @@ using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
 constexpr int PipelineStages = 2;
 
 #else
-  using TileShape = Shape<_32, _64, _64>;
+  using TileShape = Shape<_128, _128, _32>;
   using TiledMma =
-      typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-                                    Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+      typename TiledMMAHelper<MMA_Atom<XE_4x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
+                                    Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
   using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
   constexpr int PipelineStages = 4;
 #endif
@@ -133,9 +141,9 @@ using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
         ElementOutput,
         cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>, // Convert CUTLASS 2.x to CUTLASS 3.x representation
         FusionCallBacks,
-        XE_2D_U32x8x16_LD_N, // The copy atom used to load matrix C
+        XE_2D_U32x4x16_LD_N, // The copy atom used to load matrix C
         void, void,
-        XE_2D_U32x8x16_ST_N, // The copy atom used to store matrix D
+        XE_2D_U32x4x16_ST_N, // The copy atom used to store matrix D
         void, void>;
 using EpilogueParams = typename CollectiveEpilogue::Params;
 
@@ -173,7 +181,6 @@ using Copy_Scale = decltype(make_tiled_copy(atom_load_scale{}, Layout<CopyThread
 
 using StrideC = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
 using StrideD = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
-
 
 template <typename T, int BITS>
 class gemm_4bit_cutlass_kernel {
@@ -247,41 +254,93 @@ public:
     static constexpr auto compress_size = sizeof_bits_v<compress_type> / sizeof_bits_v<SrcType>;
     static_assert((compress_size % N) == 0);
   
-    static constexpr auto vec_size = 8;
+    static constexpr auto vec_size = 4;
     using VecSrcType = cute::array<compress_type, vec_size>;
     using VecDstElemType = cute::array<DstType, compress_size>;
     using VecDstType = cute::array<VecDstElemType, vec_size>;
   
     auto s_tensor = make_tensor((VecSrcType*)(raw_pointer_cast(in.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
     auto d_tensor = make_tensor((VecDstType*)(raw_pointer_cast(out.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
- 
- //if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, compress_size = %d, vec_size = %d\n", decltype(size(out))::value, N, K, compress_size, vec_size);
-    #pragma unroll
+
+//    constexpr float quant_map[16] = {
+//            -1.0,
+//            -0.6961928009986877,
+//            -0.5250730514526367,
+//            -0.39491748809814453,
+//            -0.28444138169288635,
+//            -0.18477343022823334,
+//            -0.09105003625154495,
+//            0.0,
+//            0.07958029955625534,
+//            0.16093020141124725,
+//            0.24611230194568634,
+//            0.33791524171829224,
+//            0.44070982933044434,
+//            0.5626170039176941,
+//            0.7229568362236023,
+//            1.0,
+//        };
+if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, compress_size = %d, vec_size = %d\n", decltype(size(out))::value, N, K, compress_size, vec_size);
+#if 1
+    //#pragma unroll
     for (int n = 0; n < N; n++) {
       float ts = tCrS_input(n);
       auto& src = *(cute::array<VecSrcType, K / (compress_size * vec_size)>*)(s_tensor(_, n).data());
       auto& dst = *(cute::array<VecDstType, K / (compress_size * vec_size)>*)(d_tensor(_, n).data());
   
-      #pragma unroll
+      //#pragma unroll
       for (int k = 0; k < K / (compress_size * vec_size); k++) {
-        VecSrcType src_val = src[k];
+        //VecSrcType src_val = src[k];
         VecDstType dst_val;
   
-        #pragma unroll
+        //#pragma unroll
         for (int i = 0; i < vec_size; i++) {
-          compress_type compressed_val = src_val[i];
+          //compress_type compressed_val = src_val[i];
           VecDstElemType dst_elem;
-  
-          #pragma unroll
-          for (int j = 0; j < compress_size / 2; j++) {
-              dst_elem[2*j]   = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2 + 1))) & 0xf] * ts);
-              dst_elem[2*j+1] = static_cast<DstType>(quant_map[(compressed_val >> (4 * (j * 2))) & 0xf] * ts);
+ 
+// float4 vals = reinterpret_cast<const float4*>(quant_map)[idx/4];
+          //#pragma unroll
+          for (int j = 0; j < compress_size; j++) {
+              //uint8_t high = (src[k][i]>> (4 * (j * 2 + 1))) & 0xf;
+              //uint8_t low = (compressed_val >> (4 * (j * 2))) & 0xf;
+              //dst[k][i][j] = static_cast<DstType>(quant_map[(src[k][i]>> (4 * (j * 2 + 1))) & 0xf] * ts);
+              //dst_elem[j] = static_cast<DstType>(quant_map[(src[k][i]>> (4 * (j * 2 + 1))) & 0xf] * ts);
+              dst_elem[j] = static_cast<DstType>(1.5f * ts);
+              //dst_elem[2*j+1] = static_cast<DstType>(quant_map[low] * ts);
           }
           dst_val[i] = dst_elem;
         }
         dst[k] = dst_val;
       }
     }
+#else
+    constexpr int shifts[8] = {4,0,12,8,20,16,28,24};
+
+    #pragma unroll
+    for (int n = 0; n < N; n++) {
+        DstType ts = static_cast<DstType>(tCrS_input(n));
+        auto& src = *(cute::array<VecSrcType, K / (compress_size * vec_size)>*)(s_tensor(_, n).data());
+        auto& dst = *(cute::array<VecDstType, K / (compress_size * vec_size)>*)(d_tensor(_, n).data());
+
+       const auto src_val = src[0];
+       VecDstType dst_val;
+       #pragma unroll
+       for (int i = 0; i < vec_size; ++i) {
+           const compress_type val = src_val[i];
+           VecDstElemType dst_elem;
+           dst_elem[0] = quant_map[(val>>shifts[0])&0xF] * ts;
+           dst_elem[1] = quant_map[(val>>shifts[1])&0xF] * ts;
+           dst_elem[2] = quant_map[(val>>shifts[2])&0xF] * ts;
+           dst_elem[3] = quant_map[(val>>shifts[3])&0xF] * ts;
+           dst_elem[4] = quant_map[(val>>shifts[4])&0xF] * ts;
+           dst_elem[5] = quant_map[(val>>shifts[5])&0xF] * ts;
+           dst_elem[6] = quant_map[(val>>shifts[6])&0xF] * ts;
+           dst_elem[7] = quant_map[(val>>shifts[7])&0xF] * ts;
+           dst_val[i] = dst_elem;
+       }
+       dst[0] = dst_val;
+    }
+#endif       
   }
 
   CUTLASS_DEVICE
@@ -311,13 +370,31 @@ public:
     for(int i=0; i<16; i++){
       quant_map[i] = datatype[i];
     }
-#else    
+#else
     float* quant_map = reinterpret_cast<float*>(smem_buf);
     if (thread_idx < 16) {
       quant_map[thread_idx] = datatype[thread_idx];
     }
     barrier_arrive(3);
 #endif
+//    constexpr float quant_map[16] = {
+//            -1.0,
+//            -0.696,//,1928009986877,
+//            -0.525,//,0730514526367,
+//            -0.394,//,91748809814453,
+//            -0.284,//,44138169288635,
+//            -0.184,//,77343022823334,
+//            -0.091,//,05003625154495,
+//            0.0,
+//            0.079,//58029955625534,
+//            0.160,//93020141124725,
+//            0.246,//11230194568634,
+//            0.337,//91524171829224,
+//            0.440,//70982933044434,
+//            0.562,//6170039176941,
+//            0.722,//9568362236023,
+//            1.0,
+//        };
     auto blk_shape = TileShape{};
     int m_coord, n_coord, l_coord;
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
@@ -459,18 +536,23 @@ public:
     }
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++, k_s++) {
-      copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
+      //copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
 
       const int s_idx = (k_start_idx + k_s) / k_reload_factor;
       copy(tiled_copy_scale, tSgS(_, _, _, s_idx), frag_copy_Scale);
 
-      dequant(dequant_frag, mma_B, fragment_scale, quant_map);
+      //dequant(dequant_frag, mma_B, fragment_scale, quant_map);
+
+      copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
 
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
+
+      //dequant(dequant_frag, mma_B, fragment_scale);//, quant_map);
+      //copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
 
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
       barrier_wait(3);
