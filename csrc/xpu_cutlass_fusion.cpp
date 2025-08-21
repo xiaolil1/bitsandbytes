@@ -36,7 +36,6 @@ using namespace cutlass::gemm;
 
 // Define Basic information 
 //Weight-only-quant (B)
-//using MmaType = sycl::ext::oneapi::bfloat16;
 using MmaType = cutlass::bfloat16_t;
 using QuantType = cutlass::uint4_t; //NF4,FP4
 
@@ -47,77 +46,55 @@ using ElementMMA = ElementA;
 using ElementQuant = QuantType;
 using ElementScale = float;
 
-using ElementAccumulator = float;      // data_type of accumulator
-using ElementComputeEpilogue = float;  // data_type of epilogue operations
+using ElementAccumulator = float;
+using ElementComputeEpilogue = float;
 using ElementOutput = float;
 
 using ProblemShape = Shape<int, int, int, int>;
 
-//constexpr int kQuantMapSize = 16;
+#if 0
 static constexpr float quant_map_static[16] = {
     -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
     -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
     0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
     0.44070983f, 0.562617f, 0.72295684f, 1.0f
 };
+#endif 
 
-//#ifndef METHOD
-//#define METHOD 1
-//#endif 
-//
-//#if METHOD == 1
-#if 0
-using TileShape = Shape<_256, _256, _32>;
+using TileShape = Shape<_32, _128, _64>;
 using TiledMma =
-      typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-                                    Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-
-
+    typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
+                                  Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
 using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
-constexpr int PipelineStages = 2;
-
-#else
-  using TileShape = Shape<_128, _128, _32>;
-  using TiledMma =
-      typename TiledMMAHelper<MMA_Atom<XE_4x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-                                    Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
-  using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
-  constexpr int PipelineStages = 4;
-#endif
+constexpr int PipelineStages = 4;
 
 using MmaAtomShape = typename TiledMma::AtomShape_MNK;
 using WorkgroupTileShape = TileShape;
-static constexpr auto BLK_M = get<0>(WorkgroupTileShape{}); //256 //16
-static constexpr auto BLK_N = get<1>(WorkgroupTileShape{}); //256 //64
-static constexpr auto BLK_K = get<2>(WorkgroupTileShape{}); //32  //64
+static constexpr auto BLK_M = get<0>(WorkgroupTileShape{});
+static constexpr auto BLK_N = get<1>(WorkgroupTileShape{});
+static constexpr auto BLK_K = get<2>(WorkgroupTileShape{});
 
 //Threads number
-static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape()); //8 //1
-static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape()); //4 //2
-static constexpr auto ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape()); //1 //1
+static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape());
+static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape());
+static constexpr auto ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape());
 
 static_assert(BLK_M % TiledMma{}.template tile_size_mnk<0>() == 0, "TiledMma permutation size must match block size.");
 static_assert(BLK_N % TiledMma{}.template tile_size_mnk<1>() == 0, "TiledMma permutation size must match block size.");
 static_assert(BLK_K % TiledMma{}.template tile_size_mnk<2>() == 0, "TiledMma permutation size must match block size.");
 
 //sub-tile shape
-static constexpr auto SG_M = ceil_div(BLK_M, ATOM_M); //32 //16
-static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N); //64 //32
-static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K); //32 //64
-using SubgroupTileShape = Shape<decltype(SG_M), decltype(SG_N), decltype(SG_K)>; //<16, 32, 64>
+static constexpr auto SG_M = ceil_div(BLK_M, ATOM_M);
+static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N);
+static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K);
+using SubgroupTileShape = Shape<decltype(SG_M), decltype(SG_N), decltype(SG_K)>;
 
-static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K; //32 //2
+static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K;
 static constexpr auto SG_QNT_WIDTH = Int<SG_N>{};
-static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}); //8*4*1*16=512 //1*2*1*16=32
+static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
 
-//// Define Mainloop dispatch policy
-//#if METHOD == 1
-//constexpr int PipelineStages = 2;
-//#else
-//constexpr int PipelineStages = 4;
-//#endif
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
-static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // 16 
+static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize;
 
 // Design Scheduler 
 using TileScheduler_ = PersistentScheduler;
@@ -133,11 +110,6 @@ using ClusterShape = typename DispatchPolicy::ClusterShape;
 using CopyThreadShape = Shape<_1, Int<SubgroupSize>>;
 using CopyThreadShapeRev = decltype(cute::reverse(CopyThreadShape{}));
 
-//#if METHOD == 1
-//using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
-//#else
-//using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
-//#endif
 using StrideA = cutlass::gemm::TagToStrideA_t<cutlass::layout::RowMajor>;
 using traits_load_A = Copy_Traits<GmemTiledCopyA, StrideA>;
 using atom_load_A = Copy_Atom<traits_load_A, ElementA>;
@@ -151,26 +123,22 @@ using atom_load_B = Copy_Atom<traits_load_B, ElementB>;
 using val_layout_load_B = decltype(make_layout(shape_div(typename traits_load_B::BlockShape{}, CopyThreadShape{})));
 using Copy_B = decltype(make_tiled_copy(atom_load_B{}, Layout<CopyThreadShape>{}, val_layout_load_B{}));
 
-//using GmemTiledCopyScale = XE_2D_U16x1x32_LD_N;
 using GmemTiledCopyScale = XE_2D_U32x1x16_LD_N; 
-using StrideScale = cute::Stride<_1, int64_t, int64_t>; //dynamic stride
+using StrideScale = cute::Stride<_1, int64_t, int64_t>;
 using traits_load_scale = Copy_Traits<GmemTiledCopyScale, StrideScale>;
 using atom_load_scale = Copy_Atom<traits_load_scale, ElementScale>;
 using val_layout_load_scale = decltype(make_layout(shape_div(typename traits_load_scale::BlockShape{}, CopyThreadShapeRev{}))); 
-using Copy_Scale = decltype(make_tiled_copy(atom_load_scale{}, Layout<CopyThreadShapeRev>{}, val_layout_load_scale{})); //group-wise scale
+using Copy_Scale = decltype(make_tiled_copy(atom_load_scale{}, Layout<CopyThreadShapeRev>{}, val_layout_load_scale{}));
 
-//using StrideC = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
+using GmemTiledCopyD = XE_2D_U32x8x16_ST_N;
 using StrideD = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
-
-using GmemTiledCopyD = XE_2D_U32x4x16_ST_N;
 using Trait_D = Copy_Traits<GmemTiledCopyD, StrideD>;
 using val_layout_store_D = decltype(make_layout(shape_div(typename Trait_D::BlockShape{}, CopyThreadShape{})));
-using XE_Copy_D = decltype(make_tiled_copy(Copy_Atom<Trait_D, ElementOutput>{}, Layout<CopyThreadShape>{}, val_layout_store_D{}));
+using Copy_D = decltype(make_tiled_copy(Copy_Atom<Trait_D, ElementOutput>{}, Layout<CopyThreadShape>{}, val_layout_store_D{}));
 
 template <typename T, int BITS>
 class gemm_4bit_cutlass_kernel {
 public:
-  // Kernel level shared memory storage
   struct Params {
     int m, n, k, l;
     T* A;
@@ -185,9 +153,7 @@ public:
   	Copy_A tiled_copy_a;
     Copy_B tiled_copy_b;
 	  Copy_Scale tiled_copy_scale;
-
-    //EpilogueParams epilogue{};
-    XE_Copy_D xe_store_d;
+    Copy_D tiled_store_d;
     KernelHardwareInfo hw_info{};
     TileSchedulerParams scheduler{};
   };
@@ -207,221 +173,53 @@ public:
     }
   }
 
-  template <class EngineIn,
-          class EngineOut,
-          class EngineScales,
-          class LayoutIn,
-          class LayoutOut,
-          class LayoutScales,
-          class... Ts>
-  CUTLASS_DEVICE void dequant(
-      Tensor<EngineIn, LayoutIn> const& in,
-      Tensor<EngineOut, LayoutOut>& out,
-      Tensor<EngineScales, LayoutScales>& tCrS_input,
-      const float* quant_map_
-  ) {
-    static_assert(is_rmem<EngineIn>::value, "Input tensor must be in registers");
-    static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
-    static_assert(size_v<LayoutOut> == cosize_v<LayoutOut>);
-  
-    using SrcType = typename EngineIn::value_type;
-    using DstType = typename EngineOut::value_type;
-    using ScaleType = typename EngineScales::value_type;
-  
-    static constexpr auto N = decltype(size<1>(in))::value;
-    static constexpr auto K = decltype(size(out))::value / N;
-  
-    using compress_type = uint32_t;
-    static constexpr auto compress_size = sizeof_bits_v<compress_type> / sizeof_bits_v<SrcType>;
-    static_assert((compress_size % N) == 0);
-  
-    static constexpr auto vec_size = 4;
-    using VecSrcType = cute::array<compress_type, vec_size>;
-    using VecDstElemType = cute::array<DstType, compress_size>;
-    using VecDstType = cute::array<VecDstElemType, vec_size>;
-  
-    auto s_tensor = make_tensor((VecSrcType*)(raw_pointer_cast(in.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
-    auto d_tensor = make_tensor((VecDstType*)(raw_pointer_cast(out.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
-
-#if 1
-    constexpr float quant_map[16] = {
-            -1.0,
-            -0.6961928009986877,
-            -0.5250730514526367,
-            -0.39491748809814453,
-            -0.28444138169288635,
-            -0.18477343022823334,
-            -0.09105003625154495,
-            0.0,
-            0.07958029955625534,
-            0.16093020141124725,
-            0.24611230194568634,
-            0.33791524171829224,
-            0.44070982933044434,
-            0.5626170039176941,
-            0.7229568362236023,
-            1.0,
-        };
-#endif        
-//if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, compress_size = %d, vec_size = %d\n", decltype(size(out))::value, N, K, compress_size, vec_size);
-#if 1
-    //constexpr int shifts[8] = {4,0,12,8,20,16,28,24};
-    #pragma unroll
-    for (int n = 0; n < N; n++) {
-      float ts = tCrS_input(n);
-      auto& src = *(cute::array<VecSrcType, K / (compress_size * vec_size)>*)(s_tensor(_, n).data());
-      auto& dst = *(cute::array<VecDstType, K / (compress_size * vec_size)>*)(d_tensor(_, n).data());
-  
-      #pragma unroll
-      for (int k = 0; k < K / (compress_size * vec_size); k++) {
-        //VecSrcType src_val = src[k];
-        VecDstType dst_val;
-  
-        #pragma unroll
-        for (int i = 0; i < vec_size; i++) {
-          //compress_type compressed_val = src_val[i];
-          VecDstElemType dst_elem;
- 
-          #pragma unroll
-          for (int j = 0; j < compress_size; j++) {
-              //uint8_t high = (src[k][i]>> (4 * (j * 2 + 1))) & 0xf;
-              //uint8_t low = (compressed_val >> (4 * (j * 2))) & 0xf;
-              //dst_elem[2*j] = static_cast<DstType>(quant_map[high] * ts);
-              //dst_elem[2*j+1] = static_cast<DstType>(quant_map[low] * ts);
-              //dst_elem[j] = static_cast<DstType>(quant_map[(val>>shifts[j])&0xF] * ts);
-              //dst_elem[j] = static_cast<DstType>(1.5f * ts);
-              dst_elem[j] = static_cast<DstType>(quant_map[(src[k][i] >> (4 * ((j+1)%2+(j/2)*2))) & 0xf] * ts);
-          }
-          dst_val[i] = dst_elem;
-        }
-        dst[k] = dst_val;
-      }
-    }
-#else
-    constexpr int shifts[8] = {4,0,12,8,20,16,28,24};
-
-    #pragma unroll
-    for (int n = 0; n < N; n++) {
-        DstType ts = static_cast<DstType>(tCrS_input(n));
-        auto& src = *(cute::array<VecSrcType, K / (compress_size * vec_size)>*)(s_tensor(_, n).data());
-        auto& dst = *(cute::array<VecDstType, K / (compress_size * vec_size)>*)(d_tensor(_, n).data());
-
-       const auto src_val = src[0];
-       VecDstType dst_val;
-       #pragma unroll
-       for (int i = 0; i < vec_size; ++i) {
-           const compress_type val = src_val[i];
-           VecDstElemType dst_elem;
-           dst_elem[0] = quant_map[(val>>shifts[0])&0xF] * ts;
-           dst_elem[1] = quant_map[(val>>shifts[1])&0xF] * ts;
-           dst_elem[2] = quant_map[(val>>shifts[2])&0xF] * ts;
-           dst_elem[3] = quant_map[(val>>shifts[3])&0xF] * ts;
-           dst_elem[4] = quant_map[(val>>shifts[4])&0xF] * ts;
-           dst_elem[5] = quant_map[(val>>shifts[5])&0xF] * ts;
-           dst_elem[6] = quant_map[(val>>shifts[6])&0xF] * ts;
-           dst_elem[7] = quant_map[(val>>shifts[7])&0xF] * ts;
-           dst_val[i] = dst_elem;
-       }
-       dst[0] = dst_val;
-    }
-#endif       
-  }
-
   CUTLASS_DEVICE
   void operator()(Params const& params, char* smem_buf) {
-    int M = params.m;
-    int N = params.n;
-    int K = params.k;
-    int L = params.l;
-    float* datatype = params.datatype;
-
-    auto tiled_copy_a = params.tiled_copy_a;
-    auto tiled_copy_b = params.tiled_copy_b;
-	  auto tiled_copy_scale = params.tiled_copy_scale;
-
-    auto problem_size = ProblemShape{M, N, K, L};
-
-    static_assert(cute::rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
-    static_assert(cute::rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
-    //static_assert(cute::rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
-    static_assert(cute::rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
-
     int thread_idx = int(ThreadIdxX());
+
     // Load Dequatize LUT and save to SLM, 16 for 4bits
-#if 0
-    float quant_map[16];
-    CUTLASS_PRAGMA_UNROLL
-    for(int i=0; i<16; i++){
-      quant_map[i] = datatype[i];
-    }
-#else
     float* quant_map = reinterpret_cast<float*>(smem_buf);
     if (thread_idx < 16) {
-      quant_map[thread_idx] = datatype[thread_idx];
+      quant_map[thread_idx] = params.datatype[thread_idx];
     }
     barrier_arrive(3);
-#endif
-//    constexpr float quant_map[16] = {
-//            -1.0,
-//            -0.696,//,1928009986877,
-//            -0.525,//,0730514526367,
-//            -0.394,//,91748809814453,
-//            -0.284,//,44138169288635,
-//            -0.184,//,77343022823334,
-//            -0.091,//,05003625154495,
-//            0.0,
-//            0.079,//58029955625534,
-//            0.160,//93020141124725,
-//            0.246,//11230194568634,
-//            0.337,//91524171829224,
-//            0.440,//70982933044434,
-//            0.562,//6170039176941,
-//            0.722,//9568362236023,
-//            1.0,
-//        };
-    auto blk_shape = TileShape{};
+
     int m_coord, n_coord, l_coord;
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
-      if(cute::thread0()) printf("log1 ....\n");
       m_coord = BlockIdxY();
       n_coord = BlockIdxX();
       l_coord = BlockIdxZ();
     } else {
-      if(cute::thread0()) printf("log2 ....\n");
       m_coord = BlockIdxX();
       n_coord = BlockIdxY();
       l_coord = BlockIdxZ();
     }
-    auto blk_coord_mnkl = make_coord(m_coord, n_coord, _, l_coord);
-    constexpr auto workgroup_shape = WorkgroupTileShape{};
-    constexpr auto subgroup_tile_shape = SubgroupTileShape{}; 
   
-    Tensor mA_mkl = cute::get_pvc_tensor(make_shape(M,K,L));
-    Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,1));
+    Tensor mA_mkl = cute::get_pvc_tensor(make_shape(params.m, params.k, params.l));
+    Tensor mB_nkl = cute::get_pvc_tensor(make_shape(params.n, params.k,1));
   
-    Tensor gA = local_tile(mA_mkl, select<0,2>(blk_shape), make_coord(m_coord,_,l_coord));
-    Tensor gB = local_tile(mB_nkl, select<1,2>(blk_shape), make_coord(n_coord,_,0));		
+    Tensor gA = local_tile(mA_mkl, select<0,2>(TileShape{}), make_coord(m_coord,_,l_coord));
+    Tensor gB = local_tile(mB_nkl, select<1,2>(TileShape{}), make_coord(n_coord,_,0));		
   
     TiledMma tiled_mma;
-    Tensor accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape)); 
+    Tensor accumulators = partition_fragment_C(tiled_mma, take<0,2>(TileShape{})); 
     clear(accumulators);
 
-    auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(K)), make_shape(K));
-    int k_tile_count = ceil_div(K, get<2>(workgroup_shape));
+    auto k_tile_iter  = cute::make_coord_iterator(idx2crd(0, make_shape(params.k)), make_shape(params.k));
+    int k_tile_count = ceil_div(params.k, get<2>(WorkgroupTileShape{}));
 
-    auto thr_copy_A = tiled_copy_a.get_slice(thread_idx);
-    auto thr_copy_B = tiled_copy_b.get_slice(thread_idx);
-	  auto thr_copy_scale = tiled_copy_scale.get_slice(thread_idx);
+    auto thr_copy_A = params.tiled_copy_a.get_slice(thread_idx);
+    auto thr_copy_B = params.tiled_copy_b.get_slice(thread_idx);
+	  auto thr_copy_scale = params.tiled_copy_scale.get_slice(thread_idx);
   
-    auto sg = syclcompat::get_nd_item<1>().get_sub_group();
-    auto first_thread_in_sg_idx = sg.get_group_linear_id() * DispatchPolicy::SubgroupSize;
+    auto first_thread_in_sg_idx = syclcompat::get_nd_item<1>().get_sub_group().get_group_linear_id() * DispatchPolicy::SubgroupSize;
     auto thr_mma = tiled_mma.get_slice(first_thread_in_sg_idx); 
   
     Tensor tCgA = thr_mma.partition_A(gA);
     Tensor tCgB = thr_mma.partition_B(gB);
 	
-    Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_a, tCgA(_,_,_,0).shape()));
-    Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(tiled_copy_b, tCgB(_,_,_,0).shape()));
+    Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(params.tiled_copy_a, tCgA(_,_,_,0).shape()));
+    Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(params.tiled_copy_b, tCgB(_,_,_,0).shape()));
 
 	  Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
 
@@ -441,8 +239,8 @@ public:
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
     Tensor tBgB = thr_copy_B.retile_S(tCgB);
 
-    auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(tiled_copy_a);;
-    auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(tiled_copy_b);;
+    auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(params.tiled_copy_a);;
+    auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(params.tiled_copy_b);;
     auto thr_prefetch_A = tiled_prefetch_a.get_slice(thread_idx);
     auto thr_prefetch_B = tiled_prefetch_b.get_slice(thread_idx);
 
@@ -451,69 +249,85 @@ public:
 	
     const int k_reload_factor = ceil_div(params.group_size, BLK_K);
 
-    auto thr_vmnk = thr_mma.thr_vmnk_;
-    int S_offset = get<2>(thr_vmnk)*SG_QNT_WIDTH;
     auto tSgS = [&](){
-        return make_tensor(make_inttuple_iter(make_coord(n_coord * BLK_N + S_offset, 0, 0)),
+        return make_tensor(make_inttuple_iter(make_coord(n_coord * BLK_N + get<2>(thr_mma.thr_vmnk_)*SG_QNT_WIDTH, 0, 0)),
                           make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, _1{}, k_tile_count/k_reload_factor),
                                       make_stride(E<0>{}*_16{}, E<0>{}*_16{}, _0{}, E<1>{}*_1{})));
       
     }();
 
-#if 0
-  if (cute::thread0()){ //thread_idx==0 && n_coord == 0 && l_coord==0) {
-      print("\n\n======================= A: \n");
-      print("  gA   : "); print(gA);   print("\n");
-      print("  tCgA : "); print(tCgA); print("\n");
-      print("  tAgA : "); print(tAgA); print("\n");
-      print("  mma_A : "); print(mma_A); print("\n");
-      print("  frag_copy_A : "); print(frag_copy_A); print("\n");
+    static constexpr int FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape()); // A frags per sub_group
+    static constexpr int FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape()); // B frags per sub_group
 
-      print("=====================  B :\n");
-      print("  gB : ");   print(gB);   print("\n");
-      print("  tCgB : "); print(tCgB); print("\n");
-      print("  tBgB : "); print(tBgB); print("\n");
-      print("  mma_B : "); print(mma_B); print("\n");
-      print("  frag_copy_B : "); print(frag_copy_B); print("\n");
-      print("  dequant_frag : "); print(dequant_frag); print("\n");
+    static constexpr int FragmentSize = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize;
 
-      print("=====================  Scale :\n");
-      print("  tiled_copy_scale : "); print(tiled_copy_scale); print("\n");
-      print("  fragment_scale : "); print(fragment_scale); print("\n");
-      print("  frag_copy_Scale : "); print(frag_copy_Scale); print("\n");
-      print("  tSgS : "); print(tSgS); print("\n");
+    auto m_sg = get_sub_group_id() / ATOM_N;
+    auto n_sg = get_sub_group_id() % ATOM_N;
 
-      print("=====================  D :\n");
-      print("  accumulators : "); print(accumulators); print("\n");
+    // Represent the full output tensor
+    Tensor mD_mnl = cute::get_pvc_tensor(make_shape(params.m, params.n, params.l));
 
-      print("=====================  Config: \n");
-      print("  threads per workgroup : "); print(MaxThreadsPerBlock);  print("\n");
-      print("  SubgroupTileShape     : "); print(SubgroupTileShape{}); print("\n");
+    // Tile the output tensor per WG and select the tile for current WG
+    Tensor g_wg_D = local_tile(mD_mnl, take<0,2>(WorkgroupTileShape{}), make_coord(m_coord,n_coord,l_coord));  // (BLK_M,BLK_N)
 
-      print("=====================  Config: \n");
-      print("  tiled_mma     : "); print(tiled_mma); print("\n");
+    // Tile the output tensor per SG and select tile for the current SG
+    Tensor gD = local_tile(g_wg_D, take<0,2>(SubgroupTileShape{}), make_coord(m_sg,n_sg));            // (SG_M,SG_N)
 
-      print("=====================  Config: \n");
-      print("  SubgroupTileShape     : "); print(SubgroupTileShape{}); print("\n");
+    auto thread_xe_store_d = params.tiled_store_d.get_thread_slice(thread_idx);
+    Tensor tCgD = thread_xe_store_d.partition_D(gD);
 
-      print("=====================  Config: \n");
-      print("  thr_mma     : "); print(thr_mma); print("\n");
-
-      print("=====================  Config: \n");
-      print("  tiled_prefetch_a :    "); print(tiled_prefetch_a); print("\n");
-
-      print("=====================  Config: \n");
-      print("  tiled_prefetch_b :    "); print(tiled_prefetch_b); print("\n");
-
-      print("=====================  Config: \n");
-      print("  pAgA :    "); print(pAgA); print("\n");
-
-      print("=====================  Config: \n");
-      print("  pBgB :    "); print(pBgB); print("\n\n\n");
-    }
-#endif  
-	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
+	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(params.k));
     int prefetch_k = k_start_idx;
+
+    auto dequant = [](auto const& in, auto& out, auto& tCrS_input, const float* quant_map_) {
+        constexpr auto N = decltype(cute::size<1>(in))::value;
+        constexpr auto K = decltype(cute::size(out))::value / N;
+    
+        using compress_type = uint32_t;
+        constexpr auto compress_size = cute::sizeof_bits_v<compress_type> / cute::sizeof_bits_v<ElementB>;
+        static_assert((compress_size % N) == 0);
+    
+        constexpr auto vec_size = K / compress_size;
+        using VecSrcType = cute::array<compress_type, vec_size>;
+        using VecDstElemType = cute::array<ElementMMA, compress_size>;
+        using VecDstType = cute::array<VecDstElemType, vec_size>;
+    
+        auto s_tensor = cute::make_tensor(
+            (VecSrcType*)(cute::raw_pointer_cast(in.data())),
+            cute::make_shape(cute::Int<K / (compress_size * vec_size)>{}, cute::Int<N>{})
+        );
+    
+        auto d_tensor = cute::make_tensor(
+            (VecDstType*)(cute::raw_pointer_cast(out.data())),
+            cute::make_shape(cute::Int<K / (compress_size * vec_size)>{}, cute::Int<N>{})
+        );
+    
+        #pragma unroll
+        for (int n = 0; n < N; n++) {
+            float ts = tCrS_input(n);
+            auto& src = *(cute::array<VecSrcType, K / (compress_size * vec_size)>*)(s_tensor(_, n).data());
+            auto& dst = *(cute::array<VecDstType, K / (compress_size * vec_size)>*)(d_tensor(_, n).data());
+    
+            #pragma unroll
+            for (int k = 0; k < K / (compress_size * vec_size); k++) {
+                VecDstType dst_val;
+    
+                #pragma unroll
+                for (int i = 0; i < vec_size; i++) {
+                    VecDstElemType dst_elem;
+    
+                    #pragma unroll
+                    for (int j = 0; j < compress_size; j++) {
+                        dst_elem[j] = static_cast<ElementMMA>(
+                            quant_map_[(src[k][i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf] * ts
+                        );
+                    }
+                    dst_val[i] = dst_elem;
+                }
+                dst[k] = dst_val;
+            }
+        }
+    };
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
@@ -522,15 +336,13 @@ public:
     }
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++, k_s++) {
-      //copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
-      copy(tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
+      copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
 
-      const int s_idx = (k_start_idx + k_s) / k_reload_factor;
-      copy(tiled_copy_scale, tSgS(_, _, _, s_idx), frag_copy_Scale);
+      copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) / k_reload_factor), frag_copy_Scale);
 
       dequant(dequant_frag, mma_B, fragment_scale, quant_map);
 
-      copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
+      copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
 
       if(prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
@@ -541,31 +353,11 @@ public:
       barrier_wait(3);
     }
 
-    static constexpr int FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape()); // A frags per sub_group
-    static constexpr int FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape()); // B frags per sub_group
-
-    static constexpr int FragmentSize = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize;
-
-    auto m_sg = get_sub_group_id() / ATOM_N;
-    auto n_sg = get_sub_group_id() % ATOM_N;
-  
-    // Represent the full output tensor
-    Tensor mD_mnl = cute::get_pvc_tensor(make_shape(M,N,L));
-
-    // Tile the output tensor per WG and select the tile for current WG
-    Tensor g_wg_D = local_tile(mD_mnl, take<0,2>(WorkgroupTileShape{}), make_coord(m_coord,n_coord,l_coord));  // (BLK_M,BLK_N)
-    
-    // Tile the output tensor per SG and select tile for the current SG
-    Tensor gD = local_tile(g_wg_D, take<0,2>(SubgroupTileShape{}), make_coord(m_sg,n_sg));            // (SG_M,SG_N)
-
-    auto thread_xe_store_d = params.xe_store_d.get_thread_slice(thread_idx);
-    Tensor tCgD = thread_xe_store_d.partition_D(gD);
-
-    //CUTLASS_PRAGMA_UNROLL
+    CUTLASS_PRAGMA_UNROLL
     for (int epi_n = 0; epi_n < FragsN; ++epi_n) {
-      //CUTLASS_PRAGMA_UNROLL
+      CUTLASS_PRAGMA_UNROLL
       for (int epi_m = 0; epi_m < FragsM; ++epi_m) {
-         copy(params.xe_store_d, accumulators(_, epi_m, epi_n), tCgD(_, epi_m, epi_n));        
+         copy(params.tiled_store_d, accumulators(_, epi_m, epi_n), tCgD(_, epi_m, epi_n));        
       }
     }
   }
@@ -619,28 +411,9 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   auto problem_shape_MNKL = problem_size;
 
   StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(m, n, l));
-  XE_Copy_D xe_store_d = {};
   auto mD = make_tensor(make_gmem_ptr(out), make_layout(make_shape(m, n, l), stride_D));
-  xe_store_d = {xe_store_d.with(mD)};
-  params.xe_store_d = xe_store_d;
-
-#if 0
-  if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
-      print("=====================  stride :\n");
-      print("  stride_A : ");   print(stride_A);   print("\n");
-      print("  stride_B : ");   print(stride_B);   print("\n");
-      print("  stride_D : ");   print(stride_D);   print("\n");
-      print("  stride_S : ");   print(stride_S);   print("\n");
-      print("=====================  mScale :\n");
-      print("  mA_mkl : ");   print(mA_mkl);   print("\n");
-      print("  mB_nkl : ");   print(mB_nkl);   print("\n");
-      print("  mScale : ");   print(mScale);   print("\n");
-      print("  tiled_copy_a : ");   print(tiled_copy_a);   print("\n");
-      print("  tiled_copy_b : ");   print(tiled_copy_b);   print("\n");
-      print("  tiled_copy_scale : ");   print(tiled_copy_scale);   print("\n");
-      print("================================== :\n");
-    }
-#endif
+  Copy_D tiled_store_d = {tiled_store_d.with(mD)};
+  params.tiled_store_d = tiled_store_d;
 
   params.hw_info = hw_info;
 
