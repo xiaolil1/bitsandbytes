@@ -346,8 +346,8 @@ public:
                       thread_idx,
                     };
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<RefSrc>(cst_args);
-
-    cst_callbacks.begin();
+#if 1
+    //cst_callbacks.begin();
 
     auto acc_frag = recast<Array<ElementOutput, FragmentSize>>(accumulators);
     auto trD_frag = recast<Array<ElementOutput, FragmentSize>>(trD);
@@ -356,38 +356,82 @@ public:
       FragsM * FragsN * FragmentSize * SubgroupSize * ATOM_M * ATOM_N * ATOM_K;
     constexpr int MN = get<0>(CtaTileMNK{}) * get<1>(CtaTileMNK{});
     static_assert(ValuesLoaded == MN, "the total elements loaded by all threads should be the same as MxN" );
-    
-    auto synchronize = [&] () {};
+
+    //copy(params.xe_store_d, accumulators, tCgD(_, FragsM, FragsN));
     CUTLASS_PRAGMA_UNROLL
-    for (int epi_n = 0; epi_n < FragsN; epi_n++) {
+    for (int epi_n = 0; epi_n < FragsN; ++epi_n) {
       CUTLASS_PRAGMA_UNROLL
-      for (int epi_m = 0; epi_m < FragsM; epi_m++) {
-        cst_callbacks.begin_loop(epi_m, epi_n);
+  for (int epi_m = 0; epi_m < FragsM; ++epi_m) {
+    // 拷贝当前分块到目标位置
+    copy(params.xe_store_d,
+         accumulators(_, epi_m, epi_n),  // 源分块
+         tCgD(_, epi_m, epi_n));         // 目标分块
+  }
+}
+//    
+//    auto synchronize = [&] () {};
+//    CUTLASS_PRAGMA_UNROLL
+//    for (int epi_n = 0; epi_n < FragsN; epi_n++) {
+//      CUTLASS_PRAGMA_UNROLL
+//      for (int epi_m = 0; epi_m < FragsM; epi_m++) {
+//#if 1        
+//        //cst_callbacks.begin_loop(epi_m, epi_n);
+//
+////        if (is_C_load_needed) {
+////          //cordinates for C and D are the same
+////          copy(params.xe_load_c, tCgD(_, epi_m, epi_n), trC);
+////        }
+//
+//        //cst_callbacks.previsit(epi_m, epi_n, 0, is_C_load_needed);
+//
+//        auto acc_frag_mn = acc_frag(_, epi_m, epi_n);
+//
+//        CUTLASS_PRAGMA_UNROLL
+//        for (int epi_v = 0; epi_v < size<0>(trD_frag); ++epi_v) {
+//          trD_frag(epi_v) = acc_frag_mn(epi_v); //cst_callbacks.visit(acc_frag_mn(epi_v), epi_v, epi_m, epi_n);
+//        }
+//        //cst_callbacks.reduce(nullptr, synchronize, epi_m, epi_n, (epi_m == FragsM - 1 && epi_n == FragsN - 1), trD_frag);
+//#endif        
+//        if constexpr (is_destination_supported) {
+//          copy(params.xe_store_d, trD, tCgD(_, epi_m, epi_n));
+//        }
+//        
+//        //cst_callbacks.end_loop(epi_m, epi_n);
+//      }
+//    }
 
-        if (is_C_load_needed) {
-          //cordinates for C and D are the same
-          copy(params.xe_load_c, tCgD(_, epi_m, epi_n), trC);
-        }
+    //cst_callbacks.end();
+#else 
+    using OutFragment = Array<float, FragmentSize>; // 根据实际类型调整
 
-        cst_callbacks.previsit(epi_m, epi_n, 0, is_C_load_needed);
-
-        auto acc_frag_mn = acc_frag(_, epi_m, epi_n);
-
+    // 2. 移除所有回调相关逻辑，直接处理累加器
+    auto acc_frag = recast<OutFragment>(accumulators);
+    auto trD_frag = make_fragment_like<OutFragment>();
+    
+    // 3. 简化主循环（保留必要的分块逻辑）
+    CUTLASS_PRAGMA_UNROLL
+    for (int epi_n = 0; epi_n < FragsN; ++epi_n) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int epi_m = 0; epi_m < FragsM; ++epi_m) {
+    
+        // 直接规约操作（示例：求和）
+        float reduce_sum = 0;
         CUTLASS_PRAGMA_UNROLL
-        for (int epi_v = 0; epi_v < size<0>(trD_frag); ++epi_v) {
-          trD_frag(epi_v) = cst_callbacks.visit(acc_frag_mn(epi_v), epi_v, epi_m, epi_n);
+        for (int i = 0; i < FragmentSize; ++i) {
+          reduce_sum += acc_frag(_, epi_m, epi_n)[i];
         }
-        cst_callbacks.reduce(nullptr, synchronize, epi_m, epi_n, (epi_m == FragsM - 1 && epi_n == FragsN - 1), trD_frag);
-        
-        if constexpr (is_destination_supported) {
-          copy(params.xe_store_d, trD, tCgD(_, epi_m, epi_n));
-        }
-        
-        cst_callbacks.end_loop(epi_m, epi_n);
+    
+        // 存储结果（根据实际需求调整）
+        trD_frag.fill(reduce_sum); // 或直接写入特定位置
+    
+        // 直接存储到全局内存（跳过临时寄存器）
+        copy(params.destination_ptr,
+             trD_frag,
+             tCgD(_, epi_m, epi_n)); // 需适配实际坐标计算
       }
     }
+#endif
 
-    cst_callbacks.end();
   }
 
 private:

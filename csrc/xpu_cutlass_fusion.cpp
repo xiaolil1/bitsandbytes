@@ -85,6 +85,7 @@ constexpr int PipelineStages = 2;
   constexpr int PipelineStages = 4;
 #endif
 
+using MmaAtomShape = typename TiledMma::AtomShape_MNK;
 using WorkgroupTileShape = TileShape;
 static constexpr auto BLK_M = get<0>(WorkgroupTileShape{}); //256 //16
 static constexpr auto BLK_N = get<1>(WorkgroupTileShape{}); //256 //64
@@ -118,11 +119,13 @@ static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}); //8*4*1*16=512 
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
 static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // 16 
 
+#if 0
 // Design Epilogue
 using EpilogueDispatchPolicy = cutlass::epilogue::IntelPVCEpilogue;
 using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<ElementAccumulator, ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
 using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape, decltype(tile_shape(TiledMma()))>;
 using SharedStorage = FusionCallBacks::SharedStorage;
+#endif
 
 // Design Scheduler 
 using TileScheduler_ = PersistentScheduler;
@@ -132,6 +135,7 @@ using TileScheduler = typename cutlass::gemm::kernel::detail::TileSchedulerSelec
 using TileSchedulerArguments = typename TileScheduler::Arguments;
 using TileSchedulerParams = typename TileScheduler::Params;
 
+#if 0
 // Define Epilogue
 using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
         EpilogueDispatchPolicy,
@@ -146,6 +150,7 @@ using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
         XE_2D_U32x4x16_ST_N, // The copy atom used to store matrix D
         void, void>;
 using EpilogueParams = typename CollectiveEpilogue::Params;
+#endif 
 
 using ClusterShape = typename DispatchPolicy::ClusterShape;
 
@@ -179,18 +184,24 @@ using atom_load_scale = Copy_Atom<traits_load_scale, ElementScale>;
 using val_layout_load_scale = decltype(make_layout(shape_div(typename traits_load_scale::BlockShape{}, CopyThreadShapeRev{}))); 
 using Copy_Scale = decltype(make_tiled_copy(atom_load_scale{}, Layout<CopyThreadShapeRev>{}, val_layout_load_scale{})); //group-wise scale
 
-using StrideC = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
+//using StrideC = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
 using StrideD = cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>;
+
+using GmemTiledCopyD = XE_2D_U32x4x16_ST_N;
+using Trait_D = Copy_Traits<GmemTiledCopyD, StrideD>;
+using val_layout_store_D = decltype(make_layout(shape_div(typename Trait_D::BlockShape{}, CopyThreadShape{})));
+using XE_Copy_D = decltype(make_tiled_copy(Copy_Atom<Trait_D, ElementOutput>{}, Layout<CopyThreadShape>{}, val_layout_store_D{}));
 
 template <typename T, int BITS>
 class gemm_4bit_cutlass_kernel {
 public:
   // Kernel level shared memory storage
+#if 0  
   struct SharedStorage {
     using EpilogueTensorStorage = typename CollectiveEpilogue::TensorStorage;
     EpilogueTensorStorage epilogue;
   };
-
+#endif
   struct Params {
     int m, n, k, l;
     T* A;
@@ -206,7 +217,8 @@ public:
     Copy_B tiled_copy_b;
 	  Copy_Scale tiled_copy_scale;
 
-    EpilogueParams epilogue{};
+    //EpilogueParams epilogue{};
+    XE_Copy_D xe_store_d;
     KernelHardwareInfo hw_info{};
     TileSchedulerParams scheduler{};
   };
@@ -362,7 +374,7 @@ public:
 
     static_assert(cute::rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
-    static_assert(cute::rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
+    //static_assert(cute::rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
     static_assert(cute::rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
 
     int thread_idx = int(ThreadIdxX());
@@ -557,7 +569,8 @@ public:
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
       barrier_wait(3);
     }
-	
+
+#if 0	
     SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>((char*)nullptr);
     CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
     auto problem_shape_MNKL = append<4>(problem_size, 1);
@@ -569,6 +582,36 @@ public:
       tiled_mma,
       thread_idx
     );
+#else
+
+    static constexpr int FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape()); // A frags per sub_group
+    static constexpr int FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape()); // B frags per sub_group
+
+    static constexpr int FragmentSize = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize;
+
+    auto m_sg = get_sub_group_id() / ATOM_N;
+    auto n_sg = get_sub_group_id() % ATOM_N;
+  
+    // Represent the full output tensor
+    Tensor mD_mnl = cute::get_pvc_tensor(make_shape(M,N,L));
+
+    // Tile the output tensor per WG and select the tile for current WG
+    Tensor g_wg_D = local_tile(mD_mnl, take<0,2>(WorkgroupTileShape{}), make_coord(m_coord,n_coord,l_coord));  // (BLK_M,BLK_N)
+    
+    // Tile the output tensor per SG and select tile for the current SG
+    Tensor gD = local_tile(g_wg_D, take<0,2>(SubgroupTileShape{}), make_coord(m_sg,n_sg));            // (SG_M,SG_N)
+
+    auto thread_xe_store_d = params.xe_store_d.get_thread_slice(thread_idx);
+    Tensor tCgD = thread_xe_store_d.partition_D(gD);
+
+    //CUTLASS_PRAGMA_UNROLL
+    for (int epi_n = 0; epi_n < FragsN; ++epi_n) {
+      //CUTLASS_PRAGMA_UNROLL
+      for (int epi_m = 0; epi_m < FragsM; ++epi_m) {
+         copy(params.xe_store_d, accumulators(_, epi_m, epi_n), tCgD(_, epi_m, epi_n));        
+      }
+    }
+#endif	
   }
 };
 
@@ -618,9 +661,12 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   cutlass::KernelHardwareInfo hw_info;
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
   auto problem_shape_MNKL = problem_size;
+
+#if 0  
   float alpha=1.0f;
   float beta=0.f;
   StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(m, n, l));
+#endif  
   StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(m, n, l));
 
 #if 0
@@ -643,7 +689,15 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
 #endif
 
   params.hw_info = hw_info;
+
+#if 0  
   params.epilogue = CollectiveEpilogue::to_underlying_arguments(problem_size, {{alpha, beta}, nullptr, stride_C, out, stride_D}, nullptr);
+#else  
+  XE_Copy_D xe_store_d = {};
+  auto mD = make_tensor(make_gmem_ptr(out), make_layout(make_shape(m, n, l), stride_D));
+  xe_store_d = {xe_store_d.with(mD)};
+  params.xe_store_d = xe_store_d;
+#endif
 
   TileSchedulerArguments scheduler{};
   params.scheduler = TileScheduler::to_underlying_arguments(
