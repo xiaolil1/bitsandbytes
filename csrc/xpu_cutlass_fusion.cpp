@@ -119,14 +119,6 @@ static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}); //8*4*1*16=512 
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
 static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize; // 16 
 
-#if 0
-// Design Epilogue
-using EpilogueDispatchPolicy = cutlass::epilogue::IntelPVCEpilogue;
-using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<ElementAccumulator, ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
-using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape, decltype(tile_shape(TiledMma()))>;
-using SharedStorage = FusionCallBacks::SharedStorage;
-#endif
-
 // Design Scheduler 
 using TileScheduler_ = PersistentScheduler;
 static_assert(cute::is_void_v<TileScheduler_> or cute::is_same_v<TileScheduler_, PersistentScheduler>, "Intel PVC does not support specializing the tile scheduler.");
@@ -134,23 +126,6 @@ using ArchTag = typename DispatchPolicy::ArchTag;
 using TileScheduler = typename cutlass::gemm::kernel::detail::TileSchedulerSelector<TileScheduler_, ArchTag, WorkgroupTileShape, cute::Shape<cute::Int<1>, cute::Int<1>, cute::Int<1>>>::Scheduler;
 using TileSchedulerArguments = typename TileScheduler::Arguments;
 using TileSchedulerParams = typename TileScheduler::Params;
-
-#if 0
-// Define Epilogue
-using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-        EpilogueDispatchPolicy,
-        TileShape,
-        ElementAccumulator,
-        cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>, // Convert CUTLASS 2.x to CUTLASS 3.x representation
-        ElementOutput,
-        cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>, // Convert CUTLASS 2.x to CUTLASS 3.x representation
-        FusionCallBacks,
-        XE_2D_U32x4x16_LD_N, // The copy atom used to load matrix C
-        void, void,
-        XE_2D_U32x4x16_ST_N, // The copy atom used to store matrix D
-        void, void>;
-using EpilogueParams = typename CollectiveEpilogue::Params;
-#endif 
 
 using ClusterShape = typename DispatchPolicy::ClusterShape;
 
@@ -196,12 +171,6 @@ template <typename T, int BITS>
 class gemm_4bit_cutlass_kernel {
 public:
   // Kernel level shared memory storage
-#if 0  
-  struct SharedStorage {
-    using EpilogueTensorStorage = typename CollectiveEpilogue::TensorStorage;
-    EpilogueTensorStorage epilogue;
-  };
-#endif
   struct Params {
     int m, n, k, l;
     T* A;
@@ -413,10 +382,12 @@ public:
     auto blk_shape = TileShape{};
     int m_coord, n_coord, l_coord;
     if (params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN) {
+      if(cute::thread0()) printf("log1 ....\n");
       m_coord = BlockIdxY();
       n_coord = BlockIdxX();
       l_coord = BlockIdxZ();
     } else {
+      if(cute::thread0()) printf("log2 ....\n");
       m_coord = BlockIdxX();
       n_coord = BlockIdxY();
       l_coord = BlockIdxZ();
@@ -570,20 +541,6 @@ public:
       barrier_wait(3);
     }
 
-#if 0	
-    SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>((char*)nullptr);
-    CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
-    auto problem_shape_MNKL = append<4>(problem_size, 1);
-    epilogue(
-      problem_shape_MNKL,
-      subgroup_tile_shape,
-      blk_coord_mnkl,
-      accumulators,
-      tiled_mma,
-      thread_idx
-    );
-#else
-
     static constexpr int FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape()); // A frags per sub_group
     static constexpr int FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape()); // B frags per sub_group
 
@@ -611,7 +568,6 @@ public:
          copy(params.xe_store_d, accumulators(_, epi_m, epi_n), tCgD(_, epi_m, epi_n));        
       }
     }
-#endif	
   }
 };
 
@@ -662,19 +618,17 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
   auto problem_shape_MNKL = problem_size;
 
-#if 0  
-  float alpha=1.0f;
-  float beta=0.f;
-  StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(m, n, l));
-#endif  
   StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(m, n, l));
+  XE_Copy_D xe_store_d = {};
+  auto mD = make_tensor(make_gmem_ptr(out), make_layout(make_shape(m, n, l), stride_D));
+  xe_store_d = {xe_store_d.with(mD)};
+  params.xe_store_d = xe_store_d;
 
 #if 0
   if (cutlass::thread(LOG_THREAD, LOG_GROUP)) {
       print("=====================  stride :\n");
       print("  stride_A : ");   print(stride_A);   print("\n");
       print("  stride_B : ");   print(stride_B);   print("\n");
-      print("  stride_C : ");   print(stride_C);   print("\n");
       print("  stride_D : ");   print(stride_D);   print("\n");
       print("  stride_S : ");   print(stride_S);   print("\n");
       print("=====================  mScale :\n");
@@ -689,15 +643,6 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
 #endif
 
   params.hw_info = hw_info;
-
-#if 0  
-  params.epilogue = CollectiveEpilogue::to_underlying_arguments(problem_size, {{alpha, beta}, nullptr, stride_C, out, stride_D}, nullptr);
-#else  
-  XE_Copy_D xe_store_d = {};
-  auto mD = make_tensor(make_gmem_ptr(out), make_layout(make_shape(m, n, l), stride_D));
-  xe_store_d = {xe_store_d.with(mD)};
-  params.xe_store_d = xe_store_d;
-#endif
 
   TileSchedulerArguments scheduler{};
   params.scheduler = TileScheduler::to_underlying_arguments(
