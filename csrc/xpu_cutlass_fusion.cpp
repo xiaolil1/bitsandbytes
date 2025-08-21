@@ -54,7 +54,7 @@ using ElementOutput = float;
 using ProblemShape = Shape<int, int, int, int>;
 
 //constexpr int kQuantMapSize = 16;
-static constexpr float quant_map[16] = {
+static constexpr float quant_map_static[16] = {
     -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
     -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
     0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
@@ -237,7 +237,7 @@ public:
       Tensor<EngineIn, LayoutIn> const& in,
       Tensor<EngineOut, LayoutOut>& out,
       Tensor<EngineScales, LayoutScales>& tCrS_input,
-      const float* quant_map
+      const float* quant_map_
   ) {
     static_assert(is_rmem<EngineIn>::value, "Input tensor must be in registers");
     static_assert(size_v<LayoutIn> == cosize_v<LayoutIn>);
@@ -262,51 +262,54 @@ public:
     auto s_tensor = make_tensor((VecSrcType*)(raw_pointer_cast(in.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
     auto d_tensor = make_tensor((VecDstType*)(raw_pointer_cast(out.data())), Shape<Int<K / (compress_size * vec_size)>, Int<N>>{});
 
-//    constexpr float quant_map[16] = {
-//            -1.0,
-//            -0.6961928009986877,
-//            -0.5250730514526367,
-//            -0.39491748809814453,
-//            -0.28444138169288635,
-//            -0.18477343022823334,
-//            -0.09105003625154495,
-//            0.0,
-//            0.07958029955625534,
-//            0.16093020141124725,
-//            0.24611230194568634,
-//            0.33791524171829224,
-//            0.44070982933044434,
-//            0.5626170039176941,
-//            0.7229568362236023,
-//            1.0,
-//        };
-if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, compress_size = %d, vec_size = %d\n", decltype(size(out))::value, N, K, compress_size, vec_size);
 #if 1
-    //#pragma unroll
+    constexpr float quant_map[16] = {
+            -1.0,
+            -0.6961928009986877,
+            -0.5250730514526367,
+            -0.39491748809814453,
+            -0.28444138169288635,
+            -0.18477343022823334,
+            -0.09105003625154495,
+            0.0,
+            0.07958029955625534,
+            0.16093020141124725,
+            0.24611230194568634,
+            0.33791524171829224,
+            0.44070982933044434,
+            0.5626170039176941,
+            0.7229568362236023,
+            1.0,
+        };
+#endif        
+//if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, compress_size = %d, vec_size = %d\n", decltype(size(out))::value, N, K, compress_size, vec_size);
+#if 1
+    //constexpr int shifts[8] = {4,0,12,8,20,16,28,24};
+    #pragma unroll
     for (int n = 0; n < N; n++) {
       float ts = tCrS_input(n);
       auto& src = *(cute::array<VecSrcType, K / (compress_size * vec_size)>*)(s_tensor(_, n).data());
       auto& dst = *(cute::array<VecDstType, K / (compress_size * vec_size)>*)(d_tensor(_, n).data());
   
-      //#pragma unroll
+      #pragma unroll
       for (int k = 0; k < K / (compress_size * vec_size); k++) {
         //VecSrcType src_val = src[k];
         VecDstType dst_val;
   
-        //#pragma unroll
+        #pragma unroll
         for (int i = 0; i < vec_size; i++) {
           //compress_type compressed_val = src_val[i];
           VecDstElemType dst_elem;
  
-// float4 vals = reinterpret_cast<const float4*>(quant_map)[idx/4];
-          //#pragma unroll
+          #pragma unroll
           for (int j = 0; j < compress_size; j++) {
               //uint8_t high = (src[k][i]>> (4 * (j * 2 + 1))) & 0xf;
               //uint8_t low = (compressed_val >> (4 * (j * 2))) & 0xf;
-              //dst[k][i][j] = static_cast<DstType>(quant_map[(src[k][i]>> (4 * (j * 2 + 1))) & 0xf] * ts);
-              //dst_elem[j] = static_cast<DstType>(quant_map[(src[k][i]>> (4 * (j * 2 + 1))) & 0xf] * ts);
-              dst_elem[j] = static_cast<DstType>(1.5f * ts);
+              //dst_elem[2*j] = static_cast<DstType>(quant_map[high] * ts);
               //dst_elem[2*j+1] = static_cast<DstType>(quant_map[low] * ts);
+              //dst_elem[j] = static_cast<DstType>(quant_map[(val>>shifts[j])&0xF] * ts);
+              //dst_elem[j] = static_cast<DstType>(1.5f * ts);
+              dst_elem[j] = static_cast<DstType>(quant_map[(src[k][i] >> (4 * ((j+1)%2+(j/2)*2))) & 0xf] * ts);
           }
           dst_val[i] = dst_elem;
         }
@@ -542,7 +545,7 @@ if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, com
       const int s_idx = (k_start_idx + k_s) / k_reload_factor;
       copy(tiled_copy_scale, tSgS(_, _, _, s_idx), frag_copy_Scale);
 
-      //dequant(dequant_frag, mma_B, fragment_scale, quant_map);
+      dequant(dequant_frag, mma_B, fragment_scale, quant_map);
 
       copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
 
@@ -550,9 +553,6 @@ if(cute::thread0()) printf("decltype(size(out))::value = %d, N = %d, K = %d, com
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
-
-      //dequant(dequant_frag, mma_B, fragment_scale);//, quant_map);
-      //copy(tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
 
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
       barrier_wait(3);
