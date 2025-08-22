@@ -36,7 +36,7 @@ using namespace cutlass::gemm;
 
 // Define Basic information 
 //Weight-only-quant (B)
-using MmaType = cutlass::bfloat16_t;
+using MmaType = sycl::ext::oneapi::bfloat16; //cutlass::bfloat16_t;
 using QuantType = cutlass::uint4_t; //NF4,FP4
 
 using ElementA = MmaType;
@@ -186,6 +186,7 @@ public:
                      ? BlockIdxX() : BlockIdxY();
     const int l_coord = BlockIdxZ();
 
+#if 1
     float* quant_map;
     {
       // Load Dequatize LUT and save to SLM, 16 for 4bits
@@ -195,7 +196,14 @@ public:
       }
       barrier_arrive(3);
 	  }
- 
+#else    
+    constexpr float quant_map[16] = {
+        -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
+        -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
+        0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
+        0.44070983f, 0.562617f, 0.72295684f, 1.0f
+    };
+#endif
     Tensor mA_mkl = cute::get_pvc_tensor(make_shape(params.m, params.k, params.l));
     Tensor mB_nkl = cute::get_pvc_tensor(make_shape(params.n, params.k,1));
   
@@ -260,33 +268,38 @@ public:
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(params.k));
     int prefetch_k = k_start_idx;
 
+#if 0
+    auto convert = [](uint8_t quant_idx, float scale) {
+        const float range = 2.0f;  // 假设量化范围[-1,1]
+        return ((quant_idx / 7.5f) - 1.0f) * scale;  // 7.5=15/2 (4-bit)
+    };
+#endif    
     auto dequant = [&] {
       constexpr int N = decltype(cute::size<1>(mma_B))::value;
       constexpr int K = decltype(cute::size(mma_B))::value / N;
-      //if(cute::thread0()) printf("K = %d, N = %d\n", K, N);
 
       using compress_type = uint32_t;
       constexpr int compress_size = cute::sizeof_bits_v<compress_type> / cute::sizeof_bits_v<ElementB>;
-      constexpr auto vec_size = K / compress_size;
+      constexpr int vec_size = K / compress_size;
 
-      using VecSrcType = cute::array<compress_type, vec_size>;
-      using VecDstElemType = cute::array<ElementMMA, compress_size>;
-      using VecDstType = cute::array<VecDstElemType, vec_size>;
+      //if(cute::thread0()) printf("N = %d, K = %d, compress_size = %d, vec_size = %d\n", N, K, compress_size, vec_size);
+      compress_type src[vec_size];
+      ElementMMA dst[K];
 
       float scale_value = fragment_scale(0);
-      auto src = *(VecSrcType*)(cute::raw_pointer_cast(dequant_frag.data()));
-      auto& dst = *(VecDstType*)(cute::raw_pointer_cast(mma_B.data()));
-      VecDstType dst_val;
-      #pragma unroll
-      for (int i = 0; i < vec_size; i++) {
-          VecDstElemType dst_elem;
+
+      reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<compress_type, vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
+
+        #pragma unroll
+        for (int i = 0; i < vec_size; i++) {
           #pragma unroll
           for (int j = 0; j < compress_size; j++) {
-              dst_elem[j] = static_cast<ElementMMA>(quant_map[(src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf] * scale_value);
+            uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
+            dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+            //dst[i*compress_size+j] = static_cast<ElementMMA>(convert(bit_value, scale_value));
           }
-          dst_val[i] = dst_elem;
-      }
-      dst = dst_val;
+        }
+        reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
     };
 
     CUTLASS_PRAGMA_UNROLL
@@ -338,7 +351,7 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
 
   using GemmKernel = gemm_4bit_cutlass_kernel<T, BITS>;
 
-  static constexpr int smem_size= 16*32/8; 
+  static constexpr int smem_size= (16+1)*32/8; 
 
   auto problem_size = ProblemShape{m, n, k, l};
 
