@@ -67,7 +67,7 @@ using TiledMma =
                                   Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
 using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
 using GmemTiledCopyB = XE_2D_U4x32x16_LD_T; 
-constexpr int PipelineStages = 4;
+constexpr int PipelineStages = 2;
 
 using MmaAtomShape = typename TiledMma::AtomShape_MNK;
 using WorkgroupTileShape = TileShape;
@@ -239,8 +239,8 @@ public:
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
     Tensor tBgB = thr_copy_B.retile_S(tCgB);
 
-    auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(params.tiled_copy_a);;
-    auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(params.tiled_copy_b);;
+    auto tiled_prefetch_a = cute::prefetch_selector<Shape<Int<BLK_M>,Int<BLK_K>>, Num_SGs>(params.tiled_copy_a);
+    auto tiled_prefetch_b = cute::prefetch_selector<Shape<Int<BLK_N>,Int<BLK_K>>, Num_SGs>(params.tiled_copy_b);
     auto thr_prefetch_A = tiled_prefetch_a.get_slice(thread_idx);
     auto thr_prefetch_B = tiled_prefetch_b.get_slice(thread_idx);
 
@@ -273,33 +273,20 @@ public:
       using VecDstElemType = cute::array<ElementMMA, compress_size>;
       using VecDstType = cute::array<VecDstElemType, vec_size>;
 
-      auto s_tensor = cute::make_tensor((VecSrcType*)(cute::raw_pointer_cast(dequant_frag.data())), cute::make_shape(cute::Int<K / (compress_size * vec_size)>{}, cute::Int<N>{}));
-      auto d_tensor = cute::make_tensor((VecDstType*)(cute::raw_pointer_cast(mma_B.data())), cute::make_shape(cute::Int<K / (compress_size * vec_size)>{}, cute::Int<N>{}));
-
-      //auto src_ = *(cute::array<VecSrcType, K / (compress_size * vec_size, N)>*)(s_tensor.data());
-      //auto dst_ = *(cute::array<VecDstType, K / (compress_size * vec_size, N)>*)(d_tensor.data());
+      float scale_value = fragment_scale(0);
+      auto src = *(VecSrcType*)(cute::raw_pointer_cast(dequant_frag.data()));
+      auto& dst = *(VecDstType*)(cute::raw_pointer_cast(mma_B.data()));
+      VecDstType dst_val;
       #pragma unroll
-      for (int n = 0; n < N; n++) {
-        float scale_value = fragment_scale(n);
-        auto src = *(cute::array<VecSrcType, K / (compress_size * vec_size)>*)(s_tensor(_, n).data());
-        auto& dst = *(cute::array<VecDstType, K / (compress_size * vec_size)>*)(d_tensor(_, n).data());
-        //auto& src = *(cute::array<VecSrcType, K / (compress_size * vec_size)>*)(src_[n]);
-        //auto& dst = *(cute::array<VecDstType, K / (compress_size * vec_size)>*)(dst_[n]);
-        #pragma unroll
-        for (int k = 0; k < K / (compress_size * vec_size); k++) {
-          VecDstType dst_val;
+      for (int i = 0; i < vec_size; i++) {
+          VecDstElemType dst_elem;
           #pragma unroll
-          for (int i = 0; i < vec_size; i++) {
-              VecDstElemType dst_elem;
-              #pragma unroll
-              for (int j = 0; j < compress_size; j++) {
-                  dst_elem[j] = static_cast<ElementMMA>(quant_map[(src[k][i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf] * scale_value);
-              }
-              dst_val[i] = dst_elem;
+          for (int j = 0; j < compress_size; j++) {
+              dst_elem[j] = static_cast<ElementMMA>(quant_map[(src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf] * scale_value);
           }
-          dst[k] = dst_val;
-        }
+          dst_val[i] = dst_elem;
       }
+      dst = dst_val;
     };
 
     CUTLASS_PRAGMA_UNROLL
@@ -308,7 +295,7 @@ public:
       prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
 
-    for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++) {
+    for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
       copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
       copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) / k_reload_factor), frag_copy_Scale);
       //barrier_wait(3);
@@ -318,7 +305,6 @@ public:
       if (prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
-        prefetch_k++;
       }
       
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
