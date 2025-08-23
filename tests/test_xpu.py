@@ -282,7 +282,7 @@ class TestXPU:
         for i in range(iters):
             #pdb.set_trace()
             if kind == "fc1":
-                A = torch.randn(2, dim, dim, dtype=dtype, device=device)
+                A = torch.randn(dim, dim, dtype=dtype, device=device)
                 B = torch.randn(dim * 4, dim, dtype=dtype, device=device) / math.sqrt(dim)
             elif kind == "fc2":
                 A = torch.randn(dim, 4 * dim, dtype=dtype, device=device)

@@ -186,7 +186,7 @@ public:
                      ? BlockIdxX() : BlockIdxY();
     const int l_coord = BlockIdxZ();
 
-#if 1
+#if 0
     float* quant_map;
     {
       // Load Dequatize LUT and save to SLM, 16 for 4bits
@@ -274,6 +274,7 @@ public:
         return ((quant_idx / 7.5f) - 1.0f) * scale;  // 7.5=15/2 (4-bit)
     };
 #endif    
+#if 0      
     auto dequant = [&] {
       constexpr int N = decltype(cute::size<1>(mma_B))::value;
       constexpr int K = decltype(cute::size(mma_B))::value / N;
@@ -284,23 +285,100 @@ public:
 
       //if(cute::thread0()) printf("N = %d, K = %d, compress_size = %d, vec_size = %d\n", N, K, compress_size, vec_size);
       compress_type src[vec_size];
-      ElementMMA dst[K];
+      reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<compress_type, vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
 
       float scale_value = fragment_scale(0);
 
-      reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<compress_type, vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
+      auto* dst = reinterpret_cast<sycl::vec<int64_t, 16>*>(&smem_buf[thread_idx * decltype(cute::size(mma_B))::value * 2]);
 
         #pragma unroll
         for (int i = 0; i < vec_size; i++) {
+          //compress_type src = src_[i];//(*src_).get(i);
+
           #pragma unroll
-          for (int j = 0; j < compress_size; j++) {
-            uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
-            dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-            //dst[i*compress_size+j] = static_cast<ElementMMA>(convert(bit_value, scale_value));
+          for (int j = 0; j < compress_size/2; j++) {
+            uint8_t high = (src[i]>> (4 * (j * 2 + 1))) & 0xf;
+            uint8_t low = (src[i] >> (4 * (j * 2))) & 0xf;
+            dst[0][i*compress_size+j*2] = static_cast<ElementMMA>(quant_map[high] * scale_value);
+            dst[0][i*compress_size+j*2+1] = static_cast<ElementMMA>(quant_map[low] * scale_value);
           }
         }
         reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
-    };
+#else
+#if 0        
+auto dequant = [&] {
+    constexpr int N = decltype(cute::size<1>(mma_B))::value;
+    constexpr int K = decltype(cute::size(mma_B))::value / N;
+    using compress_type = uint32_t;
+    constexpr int compress_size = cute::sizeof_bits_v<compress_type> / cute::sizeof_bits_v<ElementB>;
+    constexpr int vec_size = K / compress_size;
+
+    compress_type src[vec_size];
+    reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<compress_type, vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
+
+    const int tid = thread_idx;
+    constexpr int BANK_NUM = 32;
+    constexpr int ELEMS_PER_THREAD = vec_size * compress_size;
+    constexpr int ELEMS_PER_BANK = (ELEMS_PER_THREAD + BANK_NUM - 1) / BANK_NUM;
+    
+    ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(smem_buf) + tid * BANK_NUM * ELEMS_PER_BANK;
+    //auto* private_slm = reinterpret_cast<sycl::vec<int64_t, 16>*>(&smem_buf[thread_idx * BANK_NUM * ELEMS_PER_BANK * 2]);
+    //if(cute::thread0()) printf("ELEMS_PER_THREAD = %d, ELEMS_PER_BANK = %d\n", ELEMS_PER_THREAD, ELEMS_PER_BANK);
+    float scale_value = fragment_scale(0);
+    #pragma unroll
+    for (int i = 0; i < vec_size; i++) {
+      #pragma unroll
+      for (int j = 0; j < compress_size; j++) {
+        uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
+        
+        const int linear_idx = i * compress_size + j;
+        const int bank = linear_idx % BANK_NUM;
+        const int offset = linear_idx / BANK_NUM;
+        //if(cute::thread0()) printf("i = %d, j = %d, linear_idx = %d, bank = %d, offset = %d, bank * ELEMS_PER_BANK + offset = %d\n",i,j,linear_idx,bank,offset, bank * ELEMS_PER_BANK + offset);
+        
+        private_slm[bank * ELEMS_PER_BANK + offset] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+      }
+    }
+
+    reinterpret_cast<sycl::vec<uint64_t, 16>*>(&mma_B)[0] = *reinterpret_cast<sycl::vec<uint64_t, 16>*>(private_slm);
+};
+#endif
+auto dequant = [&] {
+    constexpr int N = decltype(cute::size<1>(mma_B))::value;
+    constexpr int K = decltype(cute::size(mma_B))::value / N;
+
+    using compress_type = uint32_t;
+    constexpr int compress_size = 32 / cute::sizeof_bits_v<ElementB>; 
+    constexpr int vec_size = K / compress_size; 
+
+    constexpr int BANK_NUM = 32; // Intel SLM bank 数
+    constexpr int ELEMS_PER_THREAD = vec_size * compress_size; // 64
+    constexpr int ELEMS_PER_BANK = (ELEMS_PER_THREAD + BANK_NUM - 1) / BANK_NUM; // 2
+
+    compress_type src[vec_size];
+    *reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src) =
+        *reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(
+            cute::raw_pointer_cast(dequant_frag.data()));
+
+    const int tid = thread_idx;
+    ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(smem_buf) + tid * ELEMS_PER_THREAD; // 每个线程一段 **连续** 128 B，天然 128 B 对齐
+
+    float scale_value = fragment_scale(0);
+
+    #pragma unroll
+    for (int i = 0; i < vec_size; ++i) {
+        #pragma unroll
+        for (int j = 0; j < compress_size; ++j) {
+            uint8_t bit_value = (src[i] >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
+            //uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
+            private_slm[i * compress_size + j] =
+                static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+        }
+    }
+
+    *reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data())) = *reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm);
+};
+#endif    
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
@@ -351,7 +429,9 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
 
   using GemmKernel = gemm_4bit_cutlass_kernel<T, BITS>;
 
-  static constexpr int smem_size= (16+1)*32/8; 
+  static constexpr int smem_size= BLK_N * BLK_K * 16/8; //(16+1)*32/8;
+  size_t max_slm_size = q.get_device().get_info<sycl::info::device::local_mem_size>();
+  assert(smem_size <= max_slm_size);
 
   auto problem_size = ProblemShape{m, n, k, l};
 
