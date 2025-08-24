@@ -230,20 +230,29 @@ public:
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(params.tiled_copy_b, tCgB(_,_,_,0).shape()));
 
 	  //Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
-    using DequantLayout = Layout<Shape<_16, _1, _4>>;
-	  Tensor dequant_frag = make_tensor<ElementB>(DequantLayout{});
+
+    //using DequantLayout = Layout<Shape<_16, _1, _4>>;
+	  //Tensor dequant_frag = make_tensor<ElementB>(DequantLayout{});
+
+    //using DequantLayout = Layout<Shape<_16, _1, _4>>;
+    //ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * 64;
+    //Tensor dequant_frag = make_tensor<ElementB>(cute::make_smem_ptr(slm_B), DequantLayout{});
+
+    //ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * 64;
+    //const uint8_t* gB_ptr = cute::raw_pointer_cast(thr_copy_B.retile_S(tBgB).data());
+    //*reinterpret_cast<sycl::vec<uint64_t, vec64_per_thread>*>(slm_B) = *reinterpret_cast<const sycl::vec<uint64_t, vec64_per_thread>*>(gB_ptr);
 
     static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize;
     static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
     using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>;
     Tensor fragment_scale = make_tensor<ElementScale>(FragScaleLayout{});
     
-    static_assert(std::is_same_v<typename decltype(dequant_frag)::value_type, ElementQuant>);
+    //static_assert(std::is_same_v<typename decltype(dequant_frag)::value_type, ElementQuant>);
     static_assert(std::is_same_v<typename decltype(mma_A)::value_type, ElementMMA>);
     static_assert(std::is_same_v<typename decltype(mma_B)::value_type, ElementMMA>);
 
     Tensor frag_copy_A = thr_copy_A.retile_D(mma_A);
-    Tensor frag_copy_B = thr_copy_B.retile_D(dequant_frag);
+    //Tensor frag_copy_B = thr_copy_B.retile_D(dequant_frag);
     Tensor frag_copy_Scale = thr_copy_scale.retile_D(fragment_scale);
 
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
@@ -271,6 +280,7 @@ public:
     int prefetch_k = k_start_idx;
 
 #if 1
+#if 0
 auto dequant = [&] {
     constexpr int N = decltype(cute::size<1>(mma_B))::value;
     constexpr int K = decltype(cute::size(mma_B))::value / N;
@@ -283,13 +293,14 @@ auto dequant = [&] {
     constexpr int ELEMS_PER_THREAD = vec_size * compress_size; // 64
     constexpr int ELEMS_PER_BANK = (ELEMS_PER_THREAD + BANK_NUM - 1) / BANK_NUM; // 2
 
-    compress_type src[vec_size];
-    *reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src) =
-        *reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(
-            cute::raw_pointer_cast(dequant_frag.data()));
+    //const ElementB* gB_ptr = params.B + gB(n_coord, idx2crd(k_tile, make_shape(params.k)), 0).offset();
+    ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * 512 ;
+    *reinterpret_cast<sycl::vec<uint64_t, 4>*>(slm_B) = *reinterpret_cast<const sycl::vec<uint64_t, 4>*>(gB_ptr);
 
-    const int tid = thread_idx;
-    ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(smem_buf) + tid * ELEMS_PER_THREAD; // 每个线程一段 **连续** 128 B，天然 128 B 对齐
+    compress_type src[vec_size];
+    *reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src) = *reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(slm_B);
+
+    ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B) + thread_idx * ELEMS_PER_THREAD; // 每个线程一段 **连续** 128 B，天然 128 B 对齐
 
     float scale_value = fragment_scale(0);
 
@@ -306,6 +317,7 @@ auto dequant = [&] {
 
     *reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data())) = *reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm);
 };
+#endif
 #else
 #if 1
     auto dequant = [&] {
@@ -363,9 +375,46 @@ auto dequant = [&] {
     }
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
-      copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
+      //copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
       copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) / k_reload_factor), frag_copy_Scale);
       //barrier_wait(3);
+const uint8_t* gB_ptr = params.B + cute::get<0>(gB.layout()(make_coord(n_coord, k_tile, 0)));
+auto dequant = [&] {
+    constexpr int N = decltype(cute::size<1>(mma_B))::value;
+    constexpr int K = decltype(cute::size(mma_B))::value / N;
+
+    using compress_type = uint32_t;
+    constexpr int compress_size = 32 / cute::sizeof_bits_v<ElementB>;
+    constexpr int vec_size = K / compress_size;
+
+    constexpr int BANK_NUM = 32; // Intel SLM bank 数
+    constexpr int ELEMS_PER_THREAD = vec_size * compress_size; // 64
+    constexpr int ELEMS_PER_BANK = (ELEMS_PER_THREAD + BANK_NUM - 1) / BANK_NUM; // 2
+
+    //const ElementB* gB_ptr = params.B + gB(n_coord, idx2crd(k_tile, make_shape(params.k)), 0).offset();
+    ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * 512 ;
+    *reinterpret_cast<sycl::vec<uint64_t, 4>*>(slm_B) = *reinterpret_cast<const sycl::vec<uint64_t, 4>*>(gB_ptr);
+
+    compress_type src[vec_size];
+    *reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src) = *reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(slm_B);
+
+    ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B) + thread_idx * ELEMS_PER_THREAD; // 每个线程一段 **连续** 128 B，天然 128 B 对齐
+
+    float scale_value = fragment_scale(0);
+
+    #pragma unroll
+    for (int i = 0; i < vec_size; ++i) {
+        #pragma unroll
+        for (int j = 0; j < compress_size; ++j) {
+            uint8_t bit_value = (src[i] >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
+            //uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
+            private_slm[i * compress_size + j] =
+                static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+        }
+    }
+
+    *reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data())) = *reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm);
+};
       dequant();
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       
@@ -405,7 +454,8 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
 
   using GemmKernel = gemm_4bit_cutlass_kernel<T, BITS>;
 
-  static constexpr int smem_size= BLK_N * BLK_K * 16/8; //(16+1)*32/8;
+  //static constexpr int smem_size= BLK_N * BLK_K * 16/8; //(16+1)*32/8;
+  static constexpr int smem_size = BLK_N * BLK_K * sizeof(ElementB) + BLK_N * BLK_K * sizeof(ElementMMA);
   size_t max_slm_size = q.get_device().get_info<sycl::info::device::local_mem_size>();
   assert(smem_size <= max_slm_size);
 
