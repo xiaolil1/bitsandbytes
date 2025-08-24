@@ -229,7 +229,9 @@ public:
     Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(params.tiled_copy_a, tCgA(_,_,_,0).shape()));
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(params.tiled_copy_b, tCgB(_,_,_,0).shape()));
 
-	  Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
+	  //Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
+    using DequantLayout = Layout<Shape<_16, _1, _4>>;
+	  Tensor dequant_frag = make_tensor<ElementB>(DequantLayout{});
 
     static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize;
     static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
@@ -268,81 +270,7 @@ public:
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(params.k));
     int prefetch_k = k_start_idx;
 
-#if 0
-    auto convert = [](uint8_t quant_idx, float scale) {
-        const float range = 2.0f;  // 假设量化范围[-1,1]
-        return ((quant_idx / 7.5f) - 1.0f) * scale;  // 7.5=15/2 (4-bit)
-    };
-#endif    
-#if 0      
-    auto dequant = [&] {
-      constexpr int N = decltype(cute::size<1>(mma_B))::value;
-      constexpr int K = decltype(cute::size(mma_B))::value / N;
-
-      using compress_type = uint32_t;
-      constexpr int compress_size = cute::sizeof_bits_v<compress_type> / cute::sizeof_bits_v<ElementB>;
-      constexpr int vec_size = K / compress_size;
-
-      //if(cute::thread0()) printf("N = %d, K = %d, compress_size = %d, vec_size = %d\n", N, K, compress_size, vec_size);
-      compress_type src[vec_size];
-      reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<compress_type, vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
-
-      float scale_value = fragment_scale(0);
-
-      auto* dst = reinterpret_cast<sycl::vec<int64_t, 16>*>(&smem_buf[thread_idx * decltype(cute::size(mma_B))::value * 2]);
-
-        #pragma unroll
-        for (int i = 0; i < vec_size; i++) {
-          //compress_type src = src_[i];//(*src_).get(i);
-
-          #pragma unroll
-          for (int j = 0; j < compress_size/2; j++) {
-            uint8_t high = (src[i]>> (4 * (j * 2 + 1))) & 0xf;
-            uint8_t low = (src[i] >> (4 * (j * 2))) & 0xf;
-            dst[0][i*compress_size+j*2] = static_cast<ElementMMA>(quant_map[high] * scale_value);
-            dst[0][i*compress_size+j*2+1] = static_cast<ElementMMA>(quant_map[low] * scale_value);
-          }
-        }
-        reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
-#else
-#if 0        
-auto dequant = [&] {
-    constexpr int N = decltype(cute::size<1>(mma_B))::value;
-    constexpr int K = decltype(cute::size(mma_B))::value / N;
-    using compress_type = uint32_t;
-    constexpr int compress_size = cute::sizeof_bits_v<compress_type> / cute::sizeof_bits_v<ElementB>;
-    constexpr int vec_size = K / compress_size;
-
-    compress_type src[vec_size];
-    reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<compress_type, vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
-
-    const int tid = thread_idx;
-    constexpr int BANK_NUM = 32;
-    constexpr int ELEMS_PER_THREAD = vec_size * compress_size;
-    constexpr int ELEMS_PER_BANK = (ELEMS_PER_THREAD + BANK_NUM - 1) / BANK_NUM;
-    
-    ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(smem_buf) + tid * BANK_NUM * ELEMS_PER_BANK;
-    //auto* private_slm = reinterpret_cast<sycl::vec<int64_t, 16>*>(&smem_buf[thread_idx * BANK_NUM * ELEMS_PER_BANK * 2]);
-    //if(cute::thread0()) printf("ELEMS_PER_THREAD = %d, ELEMS_PER_BANK = %d\n", ELEMS_PER_THREAD, ELEMS_PER_BANK);
-    float scale_value = fragment_scale(0);
-    #pragma unroll
-    for (int i = 0; i < vec_size; i++) {
-      #pragma unroll
-      for (int j = 0; j < compress_size; j++) {
-        uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
-        
-        const int linear_idx = i * compress_size + j;
-        const int bank = linear_idx % BANK_NUM;
-        const int offset = linear_idx / BANK_NUM;
-        //if(cute::thread0()) printf("i = %d, j = %d, linear_idx = %d, bank = %d, offset = %d, bank * ELEMS_PER_BANK + offset = %d\n",i,j,linear_idx,bank,offset, bank * ELEMS_PER_BANK + offset);
-        
-        private_slm[bank * ELEMS_PER_BANK + offset] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-      }
-    }
-
-    reinterpret_cast<sycl::vec<uint64_t, 16>*>(&mma_B)[0] = *reinterpret_cast<sycl::vec<uint64_t, 16>*>(private_slm);
-};
-#endif
+#if 1
 auto dequant = [&] {
     constexpr int N = decltype(cute::size<1>(mma_B))::value;
     constexpr int K = decltype(cute::size(mma_B))::value / N;
@@ -378,7 +306,55 @@ auto dequant = [&] {
 
     *reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data())) = *reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm);
 };
+#else
+#if 1
+    auto dequant = [&] {
+      constexpr int N = decltype(cute::size<1>(mma_B))::value;
+      constexpr int K = decltype(cute::size(mma_B))::value / N;
+
+      using compress_type = uint32_t;
+      constexpr int compress_size = cute::sizeof_bits_v<compress_type> / cute::sizeof_bits_v<ElementB>;
+      constexpr int vec_size = K / compress_size;
+
+      //if(cute::thread0()) printf("N = %d, K = %d, compress_size = %d, vec_size = %d\n", N, K, compress_size, vec_size);
+      compress_type src[vec_size];
+      ElementMMA dst[K];
+
+      float scale_value = fragment_scale(0);
+
+      reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<compress_type, vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
+
+        #pragma unroll
+        for (int i = 0; i < vec_size; i++) {
+          #pragma unroll
+          for (int j = 0; j < compress_size; j++) {
+            uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
+            dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+            //dst[i*compress_size+j] = static_cast<ElementMMA>(convert(bit_value, scale_value));
+          }
+        }
+        reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
+    };
+#else
+    auto dequant = [&] {
+      constexpr int N = decltype(cute::size<1>(mma_B))::value;
+      constexpr int K = decltype(cute::size(mma_B))::value / N;
+      float scale_value = fragment_scale(0);
+
+      //#pragma unroll
+      //for(int i=0; i<K; i++) {
+      //  mma_B[i] = static_cast<ElementMMA>(quant_map[(reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i/2] >> (4 * ((i+1)%2))) & 0xf] * scale_value);
+      //}
+
+      #pragma unroll
+      for(int i=0; i<K/2; i++) {
+        mma_B[i*2] = static_cast<ElementMMA>(quant_map[(reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i] >> 4) & 0xf] * scale_value);
+        mma_B[i*2+1] = static_cast<ElementMMA>(quant_map[reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i] & 0xf] * scale_value);
+      }
+    };
 #endif    
+#endif
+
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
