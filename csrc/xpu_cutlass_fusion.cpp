@@ -275,6 +275,10 @@ public:
     int prefetch_k = k_start_idx;
 
 #if 1 //SLM
+  //alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (64 * 4) * k_tile_count;
+  //const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * 1) * params.k/2;
+  ////using total_vec = 4*k_tile_count;
+  //reinterpret_cast<sycl::vec<uint64_t, 16>*>(slm_B)[0] = reinterpret_cast<const sycl::vec<uint64_t, 16>*>(gB_ptr)[0];
   #if 1
   auto dequant = [&] (int k_tile) {
       constexpr int N = decltype(cute::size<1>(mma_B))::value;
@@ -291,8 +295,8 @@ public:
       compress_type src[vec_size];
       reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(slm_B)[0];
   
-      //ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B); // reuse src SLM buffer, for K=64, 每个线程一段 连续 128 B，天然 128 B 对齐
-      ElementMMA dst[K];
+      ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B); // reuse src SLM buffer, for K=64, 每个线程一段 连续 128 B，天然 128 B 对齐
+      //ElementMMA dst[K];
   
       float scale_value = fragment_scale(0);
   
@@ -301,13 +305,15 @@ public:
           #pragma unroll
           for (int j = 0; j < compress_size; ++j) {
               uint8_t bit_value = (src[i] >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
-              //private_slm[i * compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-              dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+              private_slm[i * compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+              //dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
           }
       }
-  
-      //reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm)[0];
-      reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
+ 
+      for(int i=0; i<K/4/16; i++){
+        reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[i] = reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm)[i];
+        //reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[i] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[i];
+      }
   };
   #endif
 #else //register
