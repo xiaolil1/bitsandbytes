@@ -446,15 +446,16 @@ const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k
     constexpr int ELEMS_PER_THREAD = vec_size * compress_size; // 64
     constexpr int ELEMS_PER_BANK = (ELEMS_PER_THREAD + BANK_NUM - 1) / BANK_NUM; // 2
 
-    //const ElementB* gB_ptr = params.B + gB(n_coord, idx2crd(k_tile, make_shape(params.k)), 0).offset();
-    alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * 64 * 4; //512 ;
+    //alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4 + K * 4); //for K=64, 4 is hardcode for 128B alignment.
+    alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
     *reinterpret_cast<sycl::vec<uint64_t, 4>*>(slm_B) = *reinterpret_cast<const sycl::vec<uint64_t, 4>*>(gB_ptr);
 
     compress_type src[vec_size];
     *reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src) = *reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(slm_B);
 
-    //ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B) + thread_idx * ELEMS_PER_THREAD; // 每个线程一段 **连续** 128 B，天然 128 B 对齐
-    ElementMMA dst[K];
+    //ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B) + K; // for K=64, 每个线程一段 **连续** 128 B，天然 128 B 对齐
+    ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B); // reuse src SLM buffer, for K=64, 每个线程一段 **连续** 128 B，天然 128 B 对齐
+    //ElementMMA dst[K];
 
     float scale_value = fragment_scale(0);
 
@@ -464,13 +465,13 @@ const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k
         for (int j = 0; j < compress_size; ++j) {
             uint8_t bit_value = (src[i] >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
             //uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
-            //private_slm[i * compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-            dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+            private_slm[i * compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+            //dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
         }
     }
 
-    //*reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data())) = *reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm);
-    reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
+    *reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data())) = *reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm);
+    //reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
 };
       dequant();
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
@@ -512,7 +513,7 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   using GemmKernel = gemm_4bit_cutlass_kernel<T, BITS>;
 
   //static constexpr int smem_size= BLK_N * BLK_K * 16/8; //(16+1)*32/8;
-  static constexpr int smem_size = BLK_N * BLK_K * sizeof(ElementB) * 4;// + BLK_N * BLK_K * sizeof(ElementMMA);
+  static constexpr int smem_size = BLK_N * BLK_K / 64 * 256; //* sizeof(ElementB) * 4 + BLK_N * BLK_K * sizeof(ElementMMA);
   size_t max_slm_size = q.get_device().get_info<sycl::info::device::local_mem_size>();
   assert(smem_size <= max_slm_size);
 
