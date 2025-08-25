@@ -229,19 +229,14 @@ public:
     Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(params.tiled_copy_a, tCgA(_,_,_,0).shape()));
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(params.tiled_copy_b, tCgB(_,_,_,0).shape()));
 
-	  //Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
-
-    //using DequantLayout = Layout<Shape<_16, _1, _4>>;
-	  //Tensor dequant_frag = make_tensor<ElementB>(DequantLayout{});
-
-    //using DequantLayout = Layout<Shape<_16, _1, _4>>;
-    //ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * 64;
-    //Tensor dequant_frag = make_tensor<ElementB>(cute::make_smem_ptr(slm_B), DequantLayout{});
-
-    //ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * 64;
-    //const uint8_t* gB_ptr = cute::raw_pointer_cast(thr_copy_B.retile_S(tBgB).data());
-    //*reinterpret_cast<sycl::vec<uint64_t, vec64_per_thread>*>(slm_B) = *reinterpret_cast<const sycl::vec<uint64_t, vec64_per_thread>*>(gB_ptr);
-
+#if 0 //SLM: 0, register: 1
+  #if 1 //fragement register
+	  Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
+  #else //common register
+    using DequantLayout = Layout<Shape<_16, _1, _4>>;
+	  Tensor dequant_frag = make_tensor<ElementB>(DequantLayout{});
+  #endif  
+#endif
     static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize;
     static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
     using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>;
@@ -279,153 +274,89 @@ public:
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(params.k));
     int prefetch_k = k_start_idx;
 
-#if 1
-#if 1
-auto dequant = [&] (int k_tile) {
-    constexpr int N = decltype(cute::size<1>(mma_B))::value;
-    constexpr int K = decltype(cute::size(mma_B))::value / N;
-const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k/2 + k_tile * BLK_K/2;
-//if(thread_idx==8 && int(BlockIdxX())==0 && int(BlockIdxY())==0 && int(BlockIdxZ())==0){
-//  printf("BLK_N = %d, BLK_K = %d, thread_idx = %d, N = %d, params.k = %d, params.B = %x, n_coord = %d, k_tile = %d, gB_ptr = %x\n",static_cast<int>(BLK_N), static_cast<int>(BLK_K), thread_idx, N, params.k, params.B, n_coord, k_tile, gB_ptr);
-//      print("   gB_ptr:    "); print(gB_ptr); print("\n");
-//}
-
-    using compress_type = uint32_t;
-    constexpr int compress_size = 32 / cute::sizeof_bits_v<ElementB>;
-    constexpr int vec_size = K / compress_size;
-
-    constexpr int BANK_NUM = 32; // Intel SLM bank 数
-    constexpr int ELEMS_PER_THREAD = vec_size * compress_size; // 64
-    constexpr int ELEMS_PER_BANK = (ELEMS_PER_THREAD + BANK_NUM - 1) / BANK_NUM; // 2
-
-    //alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4 + K * 4); //for K=64, 4 is hardcode for 128B alignment.
-    alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
-    *reinterpret_cast<sycl::vec<uint64_t, 4>*>(slm_B) = *reinterpret_cast<const sycl::vec<uint64_t, 4>*>(gB_ptr);
-
-    compress_type src[vec_size];
-    *reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src) = *reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(slm_B);
-
-    //ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B) + K; // for K=64, 每个线程一段 **连续** 128 B，天然 128 B 对齐
-    ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B); // reuse src SLM buffer, for K=64, 每个线程一段 **连续** 128 B，天然 128 B 对齐
-    //ElementMMA dst[K];
-
-    float scale_value = fragment_scale(0);
-
-    #pragma unroll
-    for (int i = 0; i < vec_size; ++i) {
-        #pragma unroll
-        for (int j = 0; j < compress_size; ++j) {
-            uint8_t bit_value = (src[i] >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
-            //uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
-            private_slm[i * compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-            //dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-        }
-    }
-
-    *reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data())) = *reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm);
-    //reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
-};
-#endif
-#else
-#if 1
-    auto dequant = [&] {
+#if 1 //SLM
+  #if 1
+  auto dequant = [&] (int k_tile) {
       constexpr int N = decltype(cute::size<1>(mma_B))::value;
       constexpr int K = decltype(cute::size(mma_B))::value / N;
-
+  
       using compress_type = uint32_t;
-      constexpr int compress_size = cute::sizeof_bits_v<compress_type> / cute::sizeof_bits_v<ElementB>;
+      constexpr int compress_size = 32 / cute::sizeof_bits_v<ElementB>;
       constexpr int vec_size = K / compress_size;
-
-      //if(cute::thread0()) printf("N = %d, K = %d, compress_size = %d, vec_size = %d\n", N, K, compress_size, vec_size);
+  
+      alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
+      const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k/2 + k_tile * BLK_K/2;
+      reinterpret_cast<sycl::vec<uint64_t, 4>*>(slm_B)[0] = reinterpret_cast<const sycl::vec<uint64_t, 4>*>(gB_ptr)[0];
+  
       compress_type src[vec_size];
+      reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(slm_B)[0];
+  
+      //ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B); // reuse src SLM buffer, for K=64, 每个线程一段 连续 128 B，天然 128 B 对齐
       ElementMMA dst[K];
-
+  
       float scale_value = fragment_scale(0);
-
-      reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<compress_type, vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
-
-        #pragma unroll
-        for (int i = 0; i < vec_size; i++) {
-          #pragma unroll
-          for (int j = 0; j < compress_size; j++) {
-            uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
-            dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-            //dst[i*compress_size+j] = static_cast<ElementMMA>(convert(bit_value, scale_value));
-          }
-        }
-        reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
-    };
-#else
-    auto dequant = [&] {
-      constexpr int N = decltype(cute::size<1>(mma_B))::value;
-      constexpr int K = decltype(cute::size(mma_B))::value / N;
-      float scale_value = fragment_scale(0);
-
-      //#pragma unroll
-      //for(int i=0; i<K; i++) {
-      //  mma_B[i] = static_cast<ElementMMA>(quant_map[(reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i/2] >> (4 * ((i+1)%2))) & 0xf] * scale_value);
-      //}
-
+  
       #pragma unroll
-      for(int i=0; i<K/2; i++) {
-        mma_B[i*2] = static_cast<ElementMMA>(quant_map[(reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i] >> 4) & 0xf] * scale_value);
-        mma_B[i*2+1] = static_cast<ElementMMA>(quant_map[reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i] & 0xf] * scale_value);
+      for (int i = 0; i < vec_size; ++i) {
+          #pragma unroll
+          for (int j = 0; j < compress_size; ++j) {
+              uint8_t bit_value = (src[i] >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
+              //private_slm[i * compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+              dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+          }
       }
-    };
-#endif    
+  
+      //reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm)[0];
+      reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
+  };
+  #endif
+#else //register
+  #if 1 //vectorized load/store
+      auto dequant = [&] {
+        constexpr int N = decltype(cute::size<1>(mma_B))::value;
+        constexpr int K = decltype(cute::size(mma_B))::value / N;
+  
+        using compress_type = uint32_t;
+        constexpr int compress_size = cute::sizeof_bits_v<compress_type> / cute::sizeof_bits_v<ElementB>;
+        constexpr int vec_size = K / compress_size;
+  
+        //if(cute::thread0()) printf("N = %d, K = %d, compress_size = %d, vec_size = %d\n", N, K, compress_size, vec_size);
+        compress_type src[vec_size];
+        ElementMMA dst[K];
+  
+        float scale_value = fragment_scale(0);
+  
+        reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<compress_type, vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
+  
+          #pragma unroll
+          for (int i = 0; i < vec_size; i++) {
+            #pragma unroll
+            for (int j = 0; j < compress_size; j++) {
+              uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
+              dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+            }
+          }
+          reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
+      };
+  #else //elemented load/store
+      auto dequant = [&] {
+        constexpr int N = decltype(cute::size<1>(mma_B))::value;
+        constexpr int K = decltype(cute::size(mma_B))::value / N;
+        float scale_value = fragment_scale(0);
+  
+        //#pragma unroll
+        //for(int i=0; i<K; i++) {
+        //  mma_B[i] = static_cast<ElementMMA>(quant_map[(reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i/2] >> (4 * ((i+1)%2))) & 0xf] * scale_value);
+        //}
+  
+        #pragma unroll
+        for(int i=0; i<K/2; i++) {
+          mma_B[i*2] = static_cast<ElementMMA>(quant_map[(reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i] >> 4) & 0xf] * scale_value);
+          mma_B[i*2+1] = static_cast<ElementMMA>(quant_map[reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i] & 0xf] * scale_value);
+        }
+      };
+  #endif    
 #endif
-#if 0
-  if (cute::thread0()){ //thread_idx==0 && n_coord == 0 && l_coord==0) {
-      print("\n\n======================= A: \n");
-      print("  gA   : "); print(gA);   print("\n");
-      print("  tCgA : "); print(tCgA); print("\n");
-      print("  tAgA : "); print(tAgA); print("\n");
-      print("  mma_A : "); print(mma_A); print("\n");
-      print("  frag_copy_A : "); print(frag_copy_A); print("\n");
-
-      print("=====================  B :\n");
-      print("  gB : ");   print(gB);   print("\n");
-      print("  tCgB : "); print(tCgB); print("\n");
-      print("  tBgB : "); print(tBgB); print("\n");
-      print("  mma_B : "); print(mma_B); print("\n");
-      //print("  frag_copy_B : "); print(frag_copy_B); print("\n");
-      //print("  dequant_frag : "); print(dequant_frag); print("\n");
-
-      print("=====================  Scale :\n");
-      print("  tiled_copy_scale : "); print(params.tiled_copy_scale); print("\n");
-      print("  fragment_scale : "); print(fragment_scale); print("\n");
-      print("  frag_copy_Scale : "); print(frag_copy_Scale); print("\n");
-      print("  tSgS : "); print(tSgS); print("\n");
-
-      print("=====================  D :\n");
-      print("  accumulators : "); print(accumulators); print("\n");
-
-      print("=====================  Config: \n");
-      print("  threads per workgroup : "); print(MaxThreadsPerBlock);  print("\n");
-      print("  SubgroupTileShape     : "); print(SubgroupTileShape{}); print("\n");
-
-      print("=====================  Config: \n");
-      print("  tiled_mma     : "); print(tiled_mma); print("\n");
-
-      print("=====================  Config: \n");
-      print("  SubgroupTileShape     : "); print(SubgroupTileShape{}); print("\n");
-
-      print("=====================  Config: \n");
-      print("  thr_mma     : "); print(thr_mma); print("\n");
-
-      print("=====================  Config: \n");
-      print("  tiled_prefetch_a :    "); print(tiled_prefetch_a); print("\n");
-
-      print("=====================  Config: \n");
-      print("  tiled_prefetch_b :    "); print(tiled_prefetch_b); print("\n");
-
-      print("=====================  Config: \n");
-      print("  pAgA :    "); print(pAgA); print("\n");
-
-      print("=====================  Config: \n");
-      print("  pBgB :    "); print(pBgB); print("\n\n\n");
-    }
-#endif  
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
@@ -434,58 +365,14 @@ const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k
     }
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
-      //copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
+#if 0 //SLM: 0, register: 1     
+      copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
+#endif      
       copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) / k_reload_factor), frag_copy_Scale);
-      //barrier_wait(3);
-#if 0      
-auto dequant = [&] {
-    constexpr int N = decltype(cute::size<1>(mma_B))::value;
-    constexpr int K = decltype(cute::size(mma_B))::value / N;
-const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k/2 + k_tile * BLK_K/2;
-//if(thread_idx==8 && int(BlockIdxX())==0 && int(BlockIdxY())==0 && int(BlockIdxZ())==0){
-//  printf("BLK_N = %d, BLK_K = %d, thread_idx = %d, N = %d, params.k = %d, params.B = %x, n_coord = %d, k_tile = %d, gB_ptr = %x\n",static_cast<int>(BLK_N), static_cast<int>(BLK_K), thread_idx, N, params.k, params.B, n_coord, k_tile, gB_ptr);
-//      print("   gB_ptr:    "); print(gB_ptr); print("\n");
-//}
-
-    using compress_type = uint32_t;
-    constexpr int compress_size = 32 / cute::sizeof_bits_v<ElementB>;
-    constexpr int vec_size = K / compress_size;
-
-    constexpr int BANK_NUM = 32; // Intel SLM bank 数
-    constexpr int ELEMS_PER_THREAD = vec_size * compress_size; // 64
-    constexpr int ELEMS_PER_BANK = (ELEMS_PER_THREAD + BANK_NUM - 1) / BANK_NUM; // 2
-
-    //alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4 + K * 4); //for K=64, 4 is hardcode for 128B alignment.
-    alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
-    *reinterpret_cast<sycl::vec<uint64_t, 4>*>(slm_B) = *reinterpret_cast<const sycl::vec<uint64_t, 4>*>(gB_ptr);
-
-    compress_type src[vec_size];
-    *reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src) = *reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(slm_B);
-
-    //ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B) + K; // for K=64, 每个线程一段 **连续** 128 B，天然 128 B 对齐
-    ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(slm_B); // reuse src SLM buffer, for K=64, 每个线程一段 **连续** 128 B，天然 128 B 对齐
-    //ElementMMA dst[K];
-
-    float scale_value = fragment_scale(0);
-
-    #pragma unroll
-    for (int i = 0; i < vec_size; ++i) {
-        #pragma unroll
-        for (int j = 0; j < compress_size; ++j) {
-            uint8_t bit_value = (src[i] >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
-            //uint8_t bit_value = (src[i] >> (4 * ((j+1)%2 + (j/2)*2))) & 0xf;
-            private_slm[i * compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-            //dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-        }
-    }
-
-    *reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data())) = *reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm);
-    //reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[0];
-};
-#endif
-      dequant(k_tile);
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
-      
+
+      dequant(k_tile);
+
       if (prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
@@ -495,6 +382,7 @@ const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k
       barrier_wait(3);
     }
 
+//replace epilige for store
     Tensor mD_mnl = cute::get_pvc_tensor(make_shape(params.m, params.n, params.l));
     Tensor g_wg_D = local_tile(mD_mnl, take<0,2>(WorkgroupTileShape{}), make_coord(m_coord,n_coord,l_coord));
     Tensor gD = local_tile(g_wg_D, take<0,2>(SubgroupTileShape{}), make_coord(
