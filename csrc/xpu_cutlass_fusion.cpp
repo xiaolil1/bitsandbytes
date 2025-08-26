@@ -61,7 +61,7 @@ static constexpr float quant_map_static[16] = {
 };
 #endif 
 
-using TileShape = Shape<_32, _128, _64>;
+using TileShape = Shape<_32, _256, _64>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                   Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
@@ -231,7 +231,7 @@ inline float dDequantizeNF4(unsigned char val) {
                      ? BlockIdxX() : BlockIdxY();
     const int l_coord = BlockIdxZ();
 
-#if 0 
+#if 1 
     //float* quant_map;
    //static constexpr std::array<float, 16> quant_map{};
    // {
@@ -383,20 +383,21 @@ inline float dDequantizeNF4(unsigned char val) {
 
         //if(cute::thread0()) printf("params.group_size = %d, k_reload_factor = %d, k_tile_count = %d, N = %d, K = %d, src_compress_size = %d, src_vec_size = %d, dst_compress_size = %d, dst_vec_size = %d\n",params.group_size, k_reload_factor, k_tile_count, N, K, src_compress_size, src_vec_size, dst_compress_size, dst_vec_size);
 
-        src_compress_type src[src_vec_size];
-        ElementMMA dst[K];
+        src_compress_type src[N*src_loop_num*src_vec_size];
+        ElementMMA dst[N*K];
 
-        reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
-          
         #pragma unroll
         for (int n = 0; n < N; n++) {
           float scale_value = fragment_scale(n);
           #pragma unroll
           for (int l = 0; l < src_loop_num; l++) {
+            //src_compress_type src[src_vec_size];
+            //ElementMMA dst[K/dst_loop_num];
+            reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[n*src_loop_num + l] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[n*src_loop_num + l];
             #pragma unroll
             for (int v = 0; v < src_vec_size; v++) {
-              src_compress_type src_value = src[n * src_loop_num * src_vec_size + l * src_vec_size + v];
-              int dst_idx = n * src_loop_num * src_vec_size * src_compress_size + l * src_vec_size * src_compress_size + v * src_compress_size;
+              src_compress_type src_value = src[(n*src_loop_num + l)*src_vec_size + v];
+              int dst_idx = ((n*src_loop_num + l)* src_vec_size + v) * src_compress_size;
               #pragma unroll
               for (int c = 0; c < src_compress_size; c++) {
                   uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
@@ -407,7 +408,7 @@ inline float dDequantizeNF4(unsigned char val) {
         
           #pragma unroll
           for (int l = 0; l < dst_loop_num; l++) {
-            reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
+            reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n*dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[n*dst_loop_num + l];
           }
         }
       };
