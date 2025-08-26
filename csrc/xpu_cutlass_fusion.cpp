@@ -325,25 +325,21 @@ inline float dDequantizeNF4(unsigned char val) {
 #if 1 //SLM
   #if 1
   auto dequant = [&] (int k_tile) {
-      constexpr int N = decltype(cute::size<1>(mma_B))::value;
-      constexpr int K = decltype(cute::size(mma_B))::value / N;
+    constexpr int N = decltype(cute::size<1>(mma_B))::value;
+    constexpr int K = decltype(cute::size(mma_B))::value / N;
 
+    using src_compress_type = uint64_t;
+    using dst_compress_type = uint64_t;
+    constexpr int src_compress_size = cute::sizeof_bits_v<src_compress_type> / cute::sizeof_bits_v<ElementB>; //16
+    constexpr int dst_compress_size = cute::sizeof_bits_v<dst_compress_type> / cute::sizeof_bits_v<ElementMMA>; //16
+    constexpr int src_vec_size = (K / src_compress_size) >= 16 ? 16 : K / src_compress_size; //4, 16 -> max vec_size of sycl::vec
+    constexpr int dst_vec_size = (K / dst_compress_size) >= 16 ? 16 : K / dst_compress_size; //16, 16 -> max vec_size of sycl::vec
+    constexpr int src_loop_num = K / src_vec_size / src_compress_size;
+    constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
 
-        using src_compress_type = uint64_t;
-        using dst_compress_type = uint64_t;
-        constexpr int src_compress_size = cute::sizeof_bits_v<src_compress_type> / cute::sizeof_bits_v<ElementB>; //16
-        constexpr int dst_compress_size = cute::sizeof_bits_v<dst_compress_type> / cute::sizeof_bits_v<ElementMMA>; //16
-        constexpr int src_vec_size = (K / src_compress_size) >= 16 ? 16 : K / src_compress_size; //4, 16 -> max vec_size of sycl::vec
-        constexpr int dst_vec_size = (K / dst_compress_size) >= 16 ? 16 : K / dst_compress_size; //16, 16 -> max vec_size of sycl::vec
-        constexpr int src_loop_num = K / src_vec_size / src_compress_size;
-        constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
-
-      alignas(16) ElementB* src = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
-      const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k / 2 + k_tile * BLK_K / 2;
-      //reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<const sycl::vec<src_compress_type, src_vec_size>*>(gB_ptr)[0];
-  
-  
-      ElementMMA* dst_slm = reinterpret_cast<ElementMMA*>(src + K); // reuse src SLM buffer, for K=64, 每个线程一段 连续 128 B，天然 128 B 对齐
+    alignas(16) ElementB* src = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
+    const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k / 2 + k_tile * BLK_K / 2;
+    ElementMMA* dst_slm = reinterpret_cast<ElementMMA*>(src + K); // reuse src SLM buffer, for K=64, 每个线程一段 连续 128 B，天然 128 B 对齐
   
     #pragma unroll
     for (int n = 0; n < N; n++) {
