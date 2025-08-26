@@ -61,7 +61,7 @@ static constexpr float quant_map_static[16] = {
 };
 #endif 
 
-using TileShape = Shape<_32, _256, _64>;
+using TileShape = Shape<_32, _128, _64>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                   Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
@@ -231,7 +231,7 @@ inline float dDequantizeNF4(unsigned char val) {
                      ? BlockIdxX() : BlockIdxY();
     const int l_coord = BlockIdxZ();
 
-#if 1 
+#if 0 
     //float* quant_map;
    //static constexpr std::array<float, 16> quant_map{};
    // {
@@ -276,7 +276,7 @@ inline float dDequantizeNF4(unsigned char val) {
     Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(params.tiled_copy_a, tCgA(_,_,_,0).shape()));
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(params.tiled_copy_b, tCgB(_,_,_,0).shape()));
 
-#if 1 //SLM: 0, register: 1
+#if 0 //SLM: 0, register: 1
   #if 1 //fragement register
 	  Tensor dequant_frag = make_tensor<ElementB>(mma_B.layout());
   #else //common register
@@ -322,7 +322,7 @@ inline float dDequantizeNF4(unsigned char val) {
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(params.k));
     int prefetch_k = k_start_idx;
 
-#if 0 //SLM
+#if 1 //SLM
   //alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (64 * 4) * k_tile_count;
   //const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * 1) * params.k/2;
   ////using total_vec = 4*k_tile_count;
@@ -350,10 +350,10 @@ inline float dDequantizeNF4(unsigned char val) {
   
       #pragma unroll
       for (int i = 0; i < vec_size; ++i) {
-          //uint32_t src_value = reinterpret_cast<uint32_t*>(src)[i];
+          uint32_t src_value = reinterpret_cast<uint32_t*>(src)[i];
           #pragma unroll
           for (int j = 0; j < compress_size; ++j) {
-              uint8_t bit_value = (reinterpret_cast<uint32_t*>(src)[i] >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
+              uint8_t bit_value = (src_value >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
               private_slm[i * compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
               //dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
           }
@@ -439,7 +439,7 @@ inline float dDequantizeNF4(unsigned char val) {
     }
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
-#if 1 //SLM: 0, register: 1     
+#if 0 //SLM: 0, register: 1     
       copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
       copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) / k_reload_factor), frag_copy_Scale);
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
@@ -486,8 +486,8 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
 
   using GemmKernel = gemm_4bit_cutlass_kernel<T, BITS>;
 
-  static constexpr int smem_size= (16) * sizeof(float);
-  //static constexpr int smem_size = BLK_N * BLK_K * sizeof(ElementMMA) * 2 * 2; //aligned with 128B and will be reused for dequant src and dst.
+  //static constexpr int smem_size= (16) * sizeof(float);
+  static constexpr int smem_size = BLK_N * BLK_K * sizeof(ElementMMA) * 2 * 2; //aligned with 128B and will be reused for dequant src and dst.
   size_t max_slm_size = q.get_device().get_info<sycl::info::device::local_mem_size>();
   assert(smem_size <= max_slm_size);
 
