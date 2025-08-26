@@ -323,45 +323,42 @@ inline float dDequantizeNF4(unsigned char val) {
     int prefetch_k = k_start_idx;
 
 #if 1 //SLM
-  //alignas(16) ElementB* slm_B = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (64 * 4) * k_tile_count;
-  //const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * 1) * params.k/2;
-  ////using total_vec = 4*k_tile_count;
-  //reinterpret_cast<sycl::vec<uint64_t, 16>*>(slm_B)[0] = reinterpret_cast<const sycl::vec<uint64_t, 16>*>(gB_ptr)[0];
   #if 1
   auto dequant = [&] (int k_tile) {
       constexpr int N = decltype(cute::size<1>(mma_B))::value;
       constexpr int K = decltype(cute::size(mma_B))::value / N;
-  
-      using compress_type = uint32_t;
-      constexpr int compress_size = 32 / cute::sizeof_bits_v<ElementB>;
-      constexpr int vec_size = K / compress_size;
-  
+
+
+        using src_compress_type = uint64_t;
+        using dst_compress_type = uint64_t;
+        constexpr int src_compress_size = cute::sizeof_bits_v<src_compress_type> / cute::sizeof_bits_v<ElementB>; //16
+        constexpr int dst_compress_size = cute::sizeof_bits_v<dst_compress_type> / cute::sizeof_bits_v<ElementMMA>; //16
+        constexpr int src_vec_size = (K / src_compress_size) >= 16 ? 16 : K / src_compress_size; //4, 16 -> max vec_size of sycl::vec
+        constexpr int dst_vec_size = (K / dst_compress_size) >= 16 ? 16 : K / dst_compress_size; //16, 16 -> max vec_size of sycl::vec
+        constexpr int src_loop_num = K / src_vec_size / src_compress_size;
+        constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
+
       alignas(16) ElementB* src = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
       const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k/2 + k_tile * BLK_K/2;
-      reinterpret_cast<sycl::vec<uint64_t, 4>*>(src)[0] = reinterpret_cast<const sycl::vec<uint64_t, 4>*>(gB_ptr)[0];
+      reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<const sycl::vec<src_compress_type, src_vec_size>*>(gB_ptr)[0];
   
-      //compress_type src[vec_size];
-      //reinterpret_cast<sycl::vec<compress_type, vec_size>*>(src)[0] = reinterpret_cast<const sycl::vec<compress_type, vec_size>*>(slm_B)[0];
   
       ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(src + K); // reuse src SLM buffer, for K=64, 每个线程一段 连续 128 B，天然 128 B 对齐
-      //ElementMMA dst[K];
   
       float scale_value = fragment_scale(0);
   
       #pragma unroll
-      for (int i = 0; i < vec_size; ++i) {
-          uint32_t src_value = reinterpret_cast<uint32_t*>(src)[i];
+      for (int i = 0; i < src_vec_size; ++i) {
+          src_compress_type src_value = reinterpret_cast<src_compress_type*>(src)[i];
           #pragma unroll
-          for (int j = 0; j < compress_size; ++j) {
+          for (int j = 0; j < src_compress_size; ++j) {
               uint8_t bit_value = (src_value >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
-              private_slm[i * compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-              //dst[i*compress_size+j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+              private_slm[i * src_compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
           }
       }
  
       for(int i=0; i<K/4/16; i++){
-        reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[i] = reinterpret_cast<const sycl::vec<int64_t, 16>*>(private_slm)[i];
-        //reinterpret_cast<sycl::vec<int64_t, 16>*>(cute::raw_pointer_cast(mma_B.data()))[i] = reinterpret_cast<sycl::vec<int64_t, 16>*>(dst)[i];
+        reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[i] = reinterpret_cast<const sycl::vec<dst_compress_type, dst_vec_size>*>(private_slm)[i];
       }
   };
   #endif
