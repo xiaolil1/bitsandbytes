@@ -339,27 +339,39 @@ inline float dDequantizeNF4(unsigned char val) {
         constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
 
       alignas(16) ElementB* src = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
-      const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k/2 + k_tile * BLK_K/2;
-      reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<const sycl::vec<src_compress_type, src_vec_size>*>(gB_ptr)[0];
+      const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k / 2 + k_tile * BLK_K / 2;
+      //reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<const sycl::vec<src_compress_type, src_vec_size>*>(gB_ptr)[0];
   
   
-      ElementMMA* private_slm = reinterpret_cast<ElementMMA*>(src + K); // reuse src SLM buffer, for K=64, 每个线程一段 连续 128 B，天然 128 B 对齐
+      ElementMMA* dst_slm = reinterpret_cast<ElementMMA*>(src + K); // reuse src SLM buffer, for K=64, 每个线程一段 连续 128 B，天然 128 B 对齐
   
-      float scale_value = fragment_scale(0);
-  
+    #pragma unroll
+    for (int n = 0; n < N; n++) {
+      float scale_value = fragment_scale(n); 
       #pragma unroll
-      for (int i = 0; i < src_vec_size; ++i) {
-          src_compress_type src_value = reinterpret_cast<src_compress_type*>(src)[i];
+      for (int l = 0; l < src_loop_num; l++) {
+        reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<const sycl::vec<src_compress_type, src_vec_size>*>(gB_ptr)[n*src_loop_num + l];
+        #pragma unroll
+        for (int v = 0; v < src_vec_size; ++v) {
+          src_compress_type src_value = reinterpret_cast<src_compress_type*>(src)[v];
+          int dst_idx = v * src_compress_size;
           #pragma unroll
-          for (int j = 0; j < src_compress_size; ++j) {
-              uint8_t bit_value = (src_value >> (4 * (((j+1) & 1) + (j >> 1) * 2))) & 0xF;
-              private_slm[i * src_compress_size + j] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+          for (int c = 0; c < src_compress_size; ++c) {
+              uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
+              dst_slm[dst_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
           }
+        }
       }
+      
+      #pragma unroll
+      for (int l = 0; l < dst_loop_num; l++) {
+        reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n*dst_loop_num + l] = reinterpret_cast<const sycl::vec<dst_compress_type, dst_vec_size>*>(dst_slm)[0];
+      }
+    }
  
-      for(int i=0; i<K/4/16; i++){
-        reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[i] = reinterpret_cast<const sycl::vec<dst_compress_type, dst_vec_size>*>(private_slm)[i];
-      }
+      //for(int i=0; i<K/4/16; i++){
+      //  reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[i] = reinterpret_cast<const sycl::vec<dst_compress_type, dst_vec_size>*>(private_slm)[i];
+      //}
   };
   #endif
 #else //register
