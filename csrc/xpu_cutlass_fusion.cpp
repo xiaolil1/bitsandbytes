@@ -339,7 +339,7 @@ inline float dDequantizeNF4(unsigned char val) {
 
     alignas(16) ElementB* src = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
     const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k / 2 + k_tile * BLK_K / 2;
-    ElementMMA* dst_slm = reinterpret_cast<ElementMMA*>(src + K); // reuse src SLM buffer, for K=64, 每个线程一段 连续 128 B，天然 128 B 对齐
+    ElementMMA* dst_slm = reinterpret_cast<ElementMMA*>(src + K); 
   
     #pragma unroll
     for (int n = 0; n < N; n++) {
@@ -364,10 +364,6 @@ inline float dDequantizeNF4(unsigned char val) {
         reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n*dst_loop_num + l] = reinterpret_cast<const sycl::vec<dst_compress_type, dst_vec_size>*>(dst_slm)[0];
       }
     }
- 
-      //for(int i=0; i<K/4/16; i++){
-      //  reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[i] = reinterpret_cast<const sycl::vec<dst_compress_type, dst_vec_size>*>(private_slm)[i];
-      //}
   };
   #endif
 #else //register
@@ -567,8 +563,7 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
     sycl_grid, sycl_block, launch_props, kernel_props
   };
 
-  auto event = syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
-  EventManager::getInstance().addEvent(event);
+  syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
 }
 
 template void gemm_4bit_cutlass<sycl::ext::oneapi::bfloat16, 16>(
