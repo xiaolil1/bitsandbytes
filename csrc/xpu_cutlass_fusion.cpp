@@ -337,10 +337,17 @@ inline float dDequantizeNF4(unsigned char val) {
     constexpr int src_loop_num = K / src_vec_size / src_compress_size;
     constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
 
-    alignas(16) ElementB* src = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * (K * 4); //for K=64, 4 is hardcode for 128B alignment.
+    alignas(8) ElementB* src = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * K * 5; //for K=64, 4 is hardcode for 128B alignment.
     const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k / 2 + k_tile * BLK_K / 2;
     ElementMMA* dst_slm = reinterpret_cast<ElementMMA*>(src + K); 
-  
+//if(cute::thread0()) {
+//  //printf("src = %x, gB_ptr = %x, dst_slm = %x\n", src, gB_ptr, dst_slm); 
+//  print("\n\n======================= SLM: \n");
+//      print("  src   : "); print(src);   print("\n");
+//      print("  gB_ptr : "); print(gB_ptr); print("\n");
+//      print("  dst_slm : "); print(dst_slm); print("\n");
+//  print("\n\n=======================\n\n");
+//}  
     #pragma unroll
     for (int n = 0; n < N; n++) {
       float scale_value = fragment_scale(n); 
