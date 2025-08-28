@@ -61,13 +61,14 @@ static constexpr float quant_map_static[16] = {
 };
 #endif 
 
-using TileShape = Shape<_32, _128, _64>;
+using TileShape = Shape<_32, _128, _128>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                   Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
 using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
 using GmemTiledCopyB = XE_2D_U4x32x16_LD_T; 
 constexpr int PipelineStages = 2;
+static constexpr auto GROUP_SIZE=64; //Block Quant Size
 
 using MmaAtomShape = typename TiledMma::AtomShape_MNK;
 using WorkgroupTileShape = TileShape;
@@ -285,9 +286,10 @@ inline float dDequantizeNF4(unsigned char val) {
   #endif  
     Tensor frag_copy_B = thr_copy_B.retile_D(dequant_frag);
 #endif
-    static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize;
-    static constexpr auto scale_traits_num = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
-    using FragScaleLayout = Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>;
+    static constexpr auto scale_shape_t = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize;
+    static constexpr auto scale_shape_n = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
+    static constexpr auto scale_shape_k = BLK_K / GROUP_SIZE;
+    using FragScaleLayout = Layout<Shape<Int<scale_shape_t>, Int<scale_shape_n>, Int<scale_shape_k>>>; //[1, dequant_N, block_num]
     Tensor fragment_scale = make_tensor<ElementScale>(FragScaleLayout{});
     
     //static_assert(std::is_same_v<typename decltype(dequant_frag)::value_type, ElementQuant>);
@@ -314,8 +316,8 @@ inline float dDequantizeNF4(unsigned char val) {
 
     auto tSgS = [&](){
         return make_tensor(make_inttuple_iter(make_coord(n_coord * BLK_N + get<2>(thr_mma.thr_vmnk_)*SG_QNT_WIDTH, 0, 0)),
-                          make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, _1{}, k_tile_count/k_reload_factor),
-                                      make_stride(E<0>{}*_16{}, E<0>{}*_16{}, _0{}, E<1>{}*_1{})));
+                          make_layout(make_shape(Int<scale_shape_t>{}, Int<scale_shape_n>{}, scale_shape_k, k_tile_count * BLK_K/params.group_size),
+                                      make_stride(E<0>{}*_32{}, E<0>{}*_32{}, E<1>{}*_1{}, E<1>{}*_1{})));
       
     }();
 
@@ -340,17 +342,20 @@ inline float dDequantizeNF4(unsigned char val) {
     alignas(8) ElementB* src = reinterpret_cast<ElementB*>(smem_buf) + thread_idx * K * 5; //for K=64, 4 is hardcode for 128B alignment.
     const uint8_t* gB_ptr = params.B + (n_coord * BLK_N + thread_idx * N) * params.k / 2 + k_tile * BLK_K / 2;
     ElementMMA* dst_slm = reinterpret_cast<ElementMMA*>(src + K); 
-//if(cute::thread0()) {
-//  //printf("src = %x, gB_ptr = %x, dst_slm = %x\n", src, gB_ptr, dst_slm); 
+#if 0    
+if(cute::thread0()) {
+//printf("src = %x, gB_ptr = %x, dst_slm = %x\n", src, gB_ptr, dst_slm); 
 //  print("\n\n======================= SLM: \n");
 //      print("  src   : "); print(src);   print("\n");
 //      print("  gB_ptr : "); print(gB_ptr); print("\n");
 //      print("  dst_slm : "); print(dst_slm); print("\n");
+//      print("   fragment_scale: "); print(fragment_scale); print("\n");
 //  print("\n\n=======================\n\n");
-//}  
+}  
+#endif
     #pragma unroll
     for (int n = 0; n < N; n++) {
-      float scale_value = fragment_scale(n); 
+      //float scale_value = fragment_scale(n);
       #pragma unroll
       for (int l = 0; l < src_loop_num; l++) {
         reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<const sycl::vec<src_compress_type, src_vec_size>*>(gB_ptr)[n*src_loop_num + l];
@@ -358,10 +363,13 @@ inline float dDequantizeNF4(unsigned char val) {
         for (int v = 0; v < src_vec_size; ++v) {
           src_compress_type src_value = reinterpret_cast<src_compress_type*>(src)[v];
           int dst_idx = v * src_compress_size;
+          //float scale_value = fragment_scale(n * (BLK_K / GROUP_SIZE) + dst_idx / GROUP_SIZE); 
           #pragma unroll
           for (int c = 0; c < src_compress_size; ++c) {
               uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
+              float scale_value = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_idx+c) / GROUP_SIZE);
               dst_slm[dst_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+              //if(cute::thread0()) printf("dst_idx+c = %d, n * (BLK_K / GROUP_SIZE) + (dst_idx+c)/GROUP_SIZE) = %d, scale_value = %f\n",dst_idx+c, n * (BLK_K / GROUP_SIZE) + (dst_idx+c)/GROUP_SIZE, scale_value);
           }
         }
       }
@@ -453,7 +461,7 @@ inline float dDequantizeNF4(unsigned char val) {
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       dequant();
 #else
-      copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) / k_reload_factor), frag_copy_Scale);
+      copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       dequant(k_tile);
 #endif      
