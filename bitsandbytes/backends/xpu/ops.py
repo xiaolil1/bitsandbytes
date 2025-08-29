@@ -184,6 +184,8 @@ if not isinstance(lib, ErrorHandlerMockBNBNativeLibrary):
         shape = (*A.shape[:-1], shapeB[0])
         out = torch.empty(shape, device=A.device, dtype=A.dtype).float()
         _gemv_4bit_impl(A, B, shapeB, absmax, code, blocksize, out=out)
+        #import pdb
+        #pdb.set_trace()
         return out.bfloat16()
 
     @register_kernel("bitsandbytes::gemv_4bit.out", "xpu")

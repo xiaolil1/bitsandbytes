@@ -61,7 +61,7 @@ static constexpr float quant_map_static[16] = {
 };
 #endif 
 
-using TileShape = Shape<_32, _128, _128>;
+using TileShape = Shape<_32, _128, _32>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                   Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
@@ -288,7 +288,7 @@ inline float dDequantizeNF4(unsigned char val) {
 #endif
     static constexpr auto scale_shape_t = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / DispatchPolicy::SubgroupSize;
     static constexpr auto scale_shape_n = SG_QNT_WIDTH / decltype(size<1>(typename GmemTiledCopyScale::BlockShape{}))::value;
-    static constexpr auto scale_shape_k = BLK_K / GROUP_SIZE;
+    static constexpr auto scale_shape_k = BLK_K / GROUP_SIZE < 1 ? 1 : BLK_K / GROUP_SIZE;
     using FragScaleLayout = Layout<Shape<Int<scale_shape_t>, Int<scale_shape_n>, Int<scale_shape_k>>>; //[1, dequant_N, block_num]
     Tensor fragment_scale = make_tensor<ElementScale>(FragScaleLayout{});
     
@@ -317,7 +317,7 @@ inline float dDequantizeNF4(unsigned char val) {
     auto tSgS = [&](){
         return make_tensor(make_inttuple_iter(make_coord(n_coord * BLK_N + get<2>(thr_mma.thr_vmnk_)*SG_QNT_WIDTH, 0, 0)),
                           make_layout(make_shape(Int<scale_shape_t>{}, Int<scale_shape_n>{}, scale_shape_k, k_tile_count * BLK_K/params.group_size),
-                                      make_stride(E<0>{}*_32{}, E<0>{}*_32{}, E<1>{}*_1{}, E<1>{}*_1{})));
+                          make_stride(E<0>{}*(scale_shape_n * scale_shape_k * DispatchPolicy::SubgroupSize), E<0>{}*(scale_shape_k * DispatchPolicy::SubgroupSize), E<1>{}*_1{}, E<1>{}*_1{})));
       
     }();
 
@@ -369,7 +369,7 @@ if(cute::thread0()) {
               uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
               float scale_value = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_idx+c) / GROUP_SIZE);
               dst_slm[dst_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-              //if(cute::thread0()) printf("dst_idx+c = %d, n * (BLK_K / GROUP_SIZE) + (dst_idx+c)/GROUP_SIZE) = %d, scale_value = %f\n",dst_idx+c, n * (BLK_K / GROUP_SIZE) + (dst_idx+c)/GROUP_SIZE, scale_value);
+              //if(thread_idx==1 && m_coord==0 && n_coord==0 && l_coord==0) printf("dst_idx+c = %d, n * (BLK_K / GROUP_SIZE) + (dst_idx+c)/GROUP_SIZE) = %d, scale_value = %f\n",dst_idx+c, n * (BLK_K / GROUP_SIZE) + (dst_idx+c)/GROUP_SIZE, scale_value);
           }
         }
       }
