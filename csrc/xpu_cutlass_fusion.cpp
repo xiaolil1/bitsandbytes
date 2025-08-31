@@ -61,10 +61,10 @@ static constexpr float quant_map_static[16] = {
 };
 #endif 
 
-using TileShape = Shape<_32, _128, _128>;
+using TileShape = Shape<_64, _128, _128>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-                                  Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+                                  Layout<Shape<_2, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
 using GmemTiledCopyB = XE_2D_U4x32x16_LD_T; 
 constexpr int PipelineStages = 2;
@@ -98,9 +98,9 @@ static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
 using DispatchPolicy = cutlass::gemm::MainloopIntelPVCMixedPrecision<PipelineStages>;
 static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize;
 
-static constexpr auto FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape());
-static constexpr auto FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape());
-static constexpr auto FragmentSize = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize;
+//static constexpr auto FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape());
+//static constexpr auto FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape());
+//static constexpr auto FragmentSize = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize;
   
 // Design Scheduler 
 using TileScheduler_ = PersistentScheduler;
@@ -395,19 +395,25 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         constexpr int src_loop_num = K / src_vec_size / src_compress_size;
         constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
 
-        //if(cute::thread0()) printf("params.group_size = %d, k_reload_factor = %d, k_tile_count = %d, N = %d, K = %d, src_compress_size = %d, src_vec_size = %d, dst_compress_size = %d, dst_vec_size = %d\n",params.group_size, k_reload_factor, k_tile_count, N, K, src_compress_size, src_vec_size, dst_compress_size, dst_vec_size);
+if(cute::thread0()) printf("N = %d, K = %d, src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_vec_size = %d, src_loop_num = %d, dst_loop_num = %d\n", N, K, src_compress_size, dst_compress_size, src_vec_size, dst_vec_size, src_loop_num, dst_loop_num); 
 
         src_compress_type src[src_vec_size];
         ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
 
         #pragma unroll
         for (int n = 0; n < N; n++) {
-          //float scale_value = fragment_scale(n);
           #pragma unroll
           for (int l = 0; l < src_loop_num; l++) {
-            //src_compress_type src[src_vec_size];
-            //ElementMMA dst[K/dst_loop_num];
             reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[n*src_loop_num + l];
+
+if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
+  printf("n = %d, src_l = %d\n", n, l);
+  print("======================= src vectorization: \n");
+      print("  src_g_ptr   : "); print(&(reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[n * src_loop_num + l]));   print("\n");
+      print("  src_ptr : "); print(&(reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0])); print("\n");
+  print("=======================\n");
+}
+
             #pragma unroll
             for (int v = 0; v < src_vec_size; v++) {
               src_compress_type src_value = src[v];
@@ -415,15 +421,25 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
               #pragma unroll
               for (int c = 0; c < src_compress_size; c++) {
                   uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-                  float scale_value = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + c) / GROUP_SIZE);
+                  float scale_value = 1.0f; //fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + c) / GROUP_SIZE);
                   dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+                  //if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) printf("n = %d, src_l = %d, dst_base_idx+c = %d, n * (BLK_K / GROUP_SIZE) + (dst_base_idx+c)/GROUP_SIZE) = %d, scale_value = %f\n", n, l, dst_base_idx+c, n * (BLK_K / GROUP_SIZE) + (dst_base_idx+c)/GROUP_SIZE, scale_value);
               }
             }
           }
         
           #pragma unroll
           for (int l = 0; l < dst_loop_num; l++) {
-            reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n*dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
+            reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
+
+if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
+  printf("n = %d, dst_l = %d\n", n, l);
+  print("======================= dst vectorization: \n");
+      print("  dst_g_ptr   : "); print(&(reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n*dst_loop_num + l]));   print("\n");
+      print("  dst_ptr : "); print(&(reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l])); print("\n");
+  print("=======================\n");
+}
+
           }
         }
       };
@@ -474,21 +490,39 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
     }
 
 //replace epilige for store
-    Tensor mD_mnl = cute::get_pvc_tensor(make_shape(params.m, params.n, params.l));
-    Tensor g_wg_D = local_tile(mD_mnl, take<0,2>(WorkgroupTileShape{}), make_coord(m_coord,n_coord,l_coord));
-    Tensor gD = local_tile(g_wg_D, take<0,2>(SubgroupTileShape{}), make_coord(
-      get_sub_group_id() / ATOM_N, 
-      get_sub_group_id() % ATOM_N
-    ));
-    
-    auto thread_xe_store_d = params.tiled_store_d.get_thread_slice(thread_idx);
-    Tensor tCgD = thread_xe_store_d.partition_D(gD);
+//    Tensor mD_mnl = cute::get_pvc_tensor(make_shape(params.m, params.n, params.l));
+//    Tensor g_wg_D = local_tile(mD_mnl, take<0,2>(WorkgroupTileShape{}), make_coord(m_coord,n_coord,l_coord));
+//    Tensor gD = local_tile(g_wg_D, take<0,2>(SubgroupTileShape{}), make_coord(
+//      get_sub_group_id() / ATOM_N, 
+//      get_sub_group_id() % ATOM_N
+//    ));
+//    
+//    auto thread_xe_store_d = params.tiled_store_d.get_thread_slice(thread_idx);
+//    Tensor tCgD = thread_xe_store_d.partition_D(gD);
 
-    #pragma unroll
-    for (int epi = 0; epi < FragsM * FragsN; ++epi) {
-      int epi_m = epi / FragsN;
-      int epi_n = epi % FragsN;
-      copy(params.tiled_store_d, accumulators(_, epi_m, epi_n), tCgD(_, epi_m, epi_n));
+    static constexpr int FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape()); // atom numbers per thread; A frags per sub_group
+    static constexpr int FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape()); // atom numbers per thread; B frags per sub_group
+
+    auto m_sg = get_sub_group_id() / ATOM_N;
+    auto n_sg = get_sub_group_id() % ATOM_N;
+
+    Tensor mD_mnl = cute::get_pvc_tensor(make_shape(params.m, params.n, params.l)); // Logical full output tensor
+
+    // Tile the output tensor per WG and select the tile for current WG
+    Tensor g_wg_D = local_tile(mD_mnl, take<0,2>(TileShape{}), make_coord(m_coord,n_coord,l_coord));
+
+    // Tile the output tensor per SG and select tile for the current SG
+    Tensor gD = local_tile(g_wg_D, take<0,2>(SubgroupTileShape{}), make_coord(m_sg,n_sg));
+
+    auto thread_xe_store_d = params.tiled_store_d.get_thread_slice(thread_idx); //partial copy_atom for current thread
+    Tensor tCgD = thread_xe_store_d.partition_D(gD); //values for current thread
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int epi_n = 0; epi_n < FragsN; ++epi_n) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int epi_m = 0; epi_m < FragsM; ++epi_m) {
+         copy(params.tiled_store_d, accumulators(_, epi_m, epi_n), tCgD(_, epi_m, epi_n));
+      }
     }
   }
 };
