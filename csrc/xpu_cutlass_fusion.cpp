@@ -394,9 +394,9 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         constexpr int dst_vec_size = (K / dst_compress_size) >= 16 ? 16 : K / dst_compress_size; //16, 16 -> max vec_size of sycl::vec
         constexpr int src_loop_num = K / src_vec_size / src_compress_size;
         constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
-
+#if 0
 if(cute::thread0()) printf("N = %d, K = %d, src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_vec_size = %d, src_loop_num = %d, dst_loop_num = %d\n", N, K, src_compress_size, dst_compress_size, src_vec_size, dst_vec_size, src_loop_num, dst_loop_num); 
-
+#endif
         src_compress_type src[src_vec_size];
         ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
 
@@ -406,6 +406,7 @@ if(cute::thread0()) printf("N = %d, K = %d, src_compress_size = %d, dst_compress
           for (int l = 0; l < src_loop_num; l++) {
             reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[n*src_loop_num + l];
 
+#if 0
 if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
   printf("n = %d, src_l = %d\n", n, l);
   print("======================= src vectorization: \n");
@@ -413,7 +414,7 @@ if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
       print("  src_ptr : "); print(&(reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0])); print("\n");
   print("=======================\n");
 }
-
+#endif
             #pragma unroll
             for (int v = 0; v < src_vec_size; v++) {
               src_compress_type src_value = src[v];
@@ -432,6 +433,7 @@ if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
           for (int l = 0; l < dst_loop_num; l++) {
             reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
 
+#if 0
 if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
   printf("n = %d, dst_l = %d\n", n, l);
   print("======================= dst vectorization: \n");
@@ -439,7 +441,7 @@ if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
       print("  dst_ptr : "); print(&(reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l])); print("\n");
   print("=======================\n");
 }
-
+#endif 
           }
         }
       };
