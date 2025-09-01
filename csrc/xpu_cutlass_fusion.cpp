@@ -422,19 +422,21 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
 
         //reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
         float scale_value = fragment_scale(0);//(dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
+        src_compress_type src;
 
         #pragma unroll
         for (int v = 0; v < src_vec_size; v++) {
+          src = reinterpret_cast<src_compress_type*>(cute::raw_pointer_cast(dequant_frag.data()))[v];
           int dst_base_idx = v * src_compress_size;
           int c = 0;
-          uint8_t bit_value = (reinterpret_cast<src_compress_type*>(cute::raw_pointer_cast(dequant_frag.data()))[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
+          uint8_t bit_value = (src >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
           float converted_value_1 = quant_map[bit_value];
           float converted_value_2 = 0.f;
           #pragma unroll
           for (; c < src_compress_size-1;) {
               converted_value_2 = converted_value_1;
               c++;
-              bit_value = (reinterpret_cast<src_compress_type*>(cute::raw_pointer_cast(dequant_frag.data()))[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
+              bit_value = (src >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
               converted_value_1 = quant_map[bit_value];
               dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
           }
