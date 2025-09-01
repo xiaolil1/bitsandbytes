@@ -238,14 +238,14 @@ inline float dDequantizeNF4(unsigned char val) {
    //static constexpr std::array<float, 16> quant_map{};
    // {
       // Load Dequatize LUT and save to SLM, 16 for 4bits
-      alignas(128) float* quant_map = reinterpret_cast<float*>(smem_buf);
+      alignas(128) float* quant_map_ = reinterpret_cast<float*>(smem_buf);
       //alignas(16) float* quant_map_2 = reinterpret_cast<float*>(smem_buf + 32*4);
       if (thread_idx < 16) {
         float value = params.datatype[thread_idx];
-        quant_map[thread_idx] = value; 
-        quant_map[thread_idx + 16] = value;
-        quant_map[thread_idx + 32] = value;
-        quant_map[thread_idx + 48] = value;
+        quant_map_[thread_idx] = value; 
+        quant_map_[thread_idx + 16] = value;
+        quant_map_[thread_idx + 32] = value;
+        quant_map_[thread_idx + 48] = value;
       }
       barrier_arrive(3);
 	  //}
@@ -420,7 +420,7 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         float scale_value = fragment_scale(0);//(dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
 
         src_compress_type src_1, src_2;
-        int map_offset = 16*(sg_idx%4); 
+        //int map_offset = 16*(sg_idx%4); 
         int v = 0;
         src_1 = reinterpret_cast<src_compress_type*>(cute::raw_pointer_cast(dequant_frag.data()))[v];
         
@@ -432,14 +432,14 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
           src_1 = reinterpret_cast<src_compress_type*>(cute::raw_pointer_cast(dequant_frag.data()))[v];
           int c = 0;
           uint8_t bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-          float converted_value_1 = quant_map[bit_value + map_offset];
+          float converted_value_1 = quant_map[bit_value];
           float converted_value_2 = 0.f;
           #pragma unroll
           for (; c < src_compress_size-1;) {
               converted_value_2 = converted_value_1;
               c++;
               bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              converted_value_1 = quant_map[bit_value + map_offset];
+              converted_value_1 = quant_map[bit_value];
               dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
           }
           dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
@@ -453,14 +453,14 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         int dst_base_idx = v * src_compress_size;
         int c = 0;
         uint8_t bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-        float converted_value_1 = quant_map[bit_value + map_offset];
+        float converted_value_1 = quant_map[bit_value];
         float converted_value_2 = 0.f;
         #pragma unroll
         for (; c < src_compress_size-1;) {
             converted_value_2 = converted_value_1;
             c++;
             bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-            converted_value_1 = quant_map[bit_value + map_offset];
+            converted_value_1 = quant_map[bit_value];
             dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
         }
         dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
@@ -501,13 +501,15 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
       prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
 
+    int map_offset = 16 * (sg_idx % 4);
+
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
 #if 1 //SLM: 0, register: 1     
       copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
       copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       //dequant((sg_idx % 4 ) < 2 ? quant_map_1 : quant_map_2);
-      dequant(quant_map);
+      dequant(quant_map_ + map_offset);
 #else
       copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
