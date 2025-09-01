@@ -246,6 +246,10 @@ inline float dDequantizeNF4(unsigned char val) {
         quant_map_[thread_idx + 16] = value;
         quant_map_[thread_idx + 32] = value;
         quant_map_[thread_idx + 48] = value;
+        quant_map_[thread_idx + 64] = value;
+        quant_map_[thread_idx + 80] = value;
+        quant_map_[thread_idx + 96] = value;
+        quant_map_[thread_idx + 112] = value;
       }
       barrier_arrive(3);
 	  //}
@@ -428,18 +432,19 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         for (; v < src_vec_size-1;) {
           src_2 = src_1;
           int dst_base_idx = v * src_compress_size;
+          //int map_offset = dst_base_idx % 2 * 16;
           v++;
           src_1 = reinterpret_cast<src_compress_type*>(cute::raw_pointer_cast(dequant_frag.data()))[v];
           int c = 0;
           uint8_t bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-          float converted_value_1 = quant_map[bit_value];
+          float converted_value_1 = quant_map[bit_value + (dst_base_idx + c) % 2 * 16];
           float converted_value_2 = 0.f;
           #pragma unroll
           for (; c < src_compress_size-1;) {
               converted_value_2 = converted_value_1;
               c++;
               bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              converted_value_1 = quant_map[bit_value];
+              converted_value_1 = quant_map[bit_value + (dst_base_idx + c - 1) % 2 * 16];
               dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
           }
           dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
@@ -451,16 +456,17 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         }
         src_2 = src_1;
         int dst_base_idx = v * src_compress_size;
+        //int map_offset = dst_base_idx % 2 * 16;
         int c = 0;
         uint8_t bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-        float converted_value_1 = quant_map[bit_value];
+        float converted_value_1 = quant_map[bit_value + (dst_base_idx + c) % 2 * 16];
         float converted_value_2 = 0.f;
         #pragma unroll
         for (; c < src_compress_size-1;) {
             converted_value_2 = converted_value_1;
             c++;
             bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-            converted_value_1 = quant_map[bit_value];
+            converted_value_1 = quant_map[bit_value + (dst_base_idx + c - 1) % 2 * 16];
             dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
         }
         dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
@@ -572,7 +578,7 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   //std::cout<<"group_size = "<<blocksize<<std::endl;
 
 #if 1
-  static constexpr int smem_size= (32) * sizeof(float) * 2;
+  static constexpr int smem_size= (32) * sizeof(float) * 2 * 2;
 #else  
   static constexpr int smem_size = BLK_N * BLK_K * sizeof(ElementMMA) * 2 * 2; //aligned with 128B and will be reused for dequant src and dst.
 #endif  
