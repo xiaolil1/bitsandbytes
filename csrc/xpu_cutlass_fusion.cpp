@@ -329,46 +329,6 @@ inline float dDequantizeNF4(unsigned char val) {
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(params.k));
     int prefetch_k = k_start_idx;
 
-#if 0
-constexpr float VALUE0 = -1.0f;
-constexpr float VALUE1 = -0.6961928f;
-constexpr float VALUE2 = -0.52507305f;
-constexpr float VALUE3 = -0.39491749f;
-constexpr float VALUE4 = -0.28444138f;
-constexpr float VALUE5 = -0.18477343f;
-constexpr float VALUE6 = -0.09105004f;
-constexpr float VALUE7 = 0.0f;
-constexpr float VALUE8 = 0.0795803f;
-constexpr float VALUE9 = 0.1609302f;
-constexpr float VALUE10 = 0.2461123f;
-constexpr float VALUE11 = 0.33791524f;
-constexpr float VALUE12 = 0.44070983f;
-constexpr float VALUE13 = 0.562617f;
-constexpr float VALUE14 = 0.72295684f;
-constexpr float VALUE15 = 1.0f;
-
-auto quant_map_alias = [&](uint8_t index) {
-  switch(index) {
-    case 0: return VALUE0;
-    case 1: return VALUE1;
-    case 2: return VALUE2;
-    case 3: return VALUE3;
-    case 4: return VALUE4;
-    case 5: return VALUE5;
-    case 6: return VALUE6;
-    case 7: return VALUE7;
-    case 8: return VALUE8;
-    case 9: return VALUE9;
-    case 10: return VALUE10;
-    case 11: return VALUE11;
-    case 12: return VALUE12;
-    case 13: return VALUE13;
-    case 14: return VALUE14;
-    case 15: return VALUE15;
-  }
-};
-#endif
-
 #if 0 //SLM
   #if 1
   auto dequant = [&] (int k_tile) {
@@ -426,11 +386,9 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
   };
   #endif
 #else //register
-  #if 1 //vectorized load/store
       auto dequant = [&] {
         constexpr int N = decltype(cute::size<1>(mma_B))::value;
         constexpr int K = decltype(cute::size(mma_B))::value / N;
-        //if(cute::thread0) printf("scale num = %d\n", decltype(cute::size(fragment_scale))::value);
   
         using src_compress_type = uint64_t;
         using dst_compress_type = uint64_t;
@@ -440,13 +398,10 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         constexpr int dst_vec_size = (K / dst_compress_size) >= 16 ? 16 : K / dst_compress_size; //16, 16 -> max vec_size of sycl::vec
         constexpr int src_loop_num = K / src_vec_size / src_compress_size;
         constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
-#if 0
-if(cute::thread0()) printf("N = %d, K = %d, src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_vec_size = %d, src_loop_num = %d, dst_loop_num = %d\n", N, K, src_compress_size, dst_compress_size, src_vec_size, dst_vec_size, src_loop_num, dst_loop_num); 
-#endif
+
         src_compress_type src[src_vec_size];
         ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
 
-sycl::vec<float, 16> loaded = *(sycl::vec<float, 16>*)&quant_map[0];
 
         #pragma unroll
         for (int n = 0; n < N; n++) {
@@ -454,69 +409,16 @@ sycl::vec<float, 16> loaded = *(sycl::vec<float, 16>*)&quant_map[0];
           for (int l = 0; l < src_loop_num; l++) {
             reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[n*src_loop_num + l];
 
-#if 0
-if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
-  printf("n = %d, src_l = %d\n", n, l);
-  print("======================= src vectorization: \n");
-      print("  src_g_ptr   : "); print(&(reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[n * src_loop_num + l]));   print("\n");
-      print("  src_ptr : "); print(&(reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0])); print("\n");
-  print("=======================\n");
-}
-#endif
             #pragma unroll
             for (int v = 0; v < src_vec_size; v++) {
               src_compress_type src_value = src[v];
               int dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
+
               #pragma unroll
               for (int c = 0; c < src_compress_size; c++) {
                   uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-                  //float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) / GROUP_SIZE);
                   float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
                   dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
-
-                  //uint8_t high = (src_value >> (4 * (c * 2 + 1))) & 0xf;
-                  //uint8_t low = (src_value >> (4 * (c * 2))) & 0xf;
-                  //float ts_high = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + 2 * c) / GROUP_SIZE);
-                  //float ts_low = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + 2 * c + 1) / GROUP_SIZE);
-                  //dst[dst_base_idx + 2 * c] = static_cast<ElementMMA>(quant_map[high] * ts_high);
-                  //dst[dst_base_idx + 2 * c + 1] = static_cast<ElementMMA>(quant_map[low] * ts_low);
-#if 0
-                  //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_alias(bit_value) * scale_value);
-
-                  constexpr uint8_t VEC_WIDTH = 4;
-                  uint8_t base_offset = (bit_value / VEC_WIDTH) * VEC_WIDTH;
-                  sycl::vec<float, VEC_WIDTH> loaded = *(sycl::vec<float, VEC_WIDTH>*)&quant_map[base_offset];
-                  //auto mask = (sycl::vec<int, VEC_WIDTH>(0,1,2,3) == (bit_value % VEC_WIDTH));
-                  //float convert_value = loaded[0] * static_cast<float>(mask[0]) +
-                  //        loaded[1] * static_cast<float>(mask[1]) +
-                  //        loaded[2] * static_cast<float>(mask[2]) +
-                  //        loaded[3] * static_cast<float>(mask[3]);
-                  auto lane = bit_value % VEC_WIDTH;
-                  float convert_value = loaded[lane];
-                  dst[dst_base_idx + c] = static_cast<ElementMMA>(convert_value * scale_value);
-//#endif                  
-                  auto mask = (sycl::vec<uint8_t, 16>(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15) == sycl::vec<uint8_t, 16>(bit_value));
-                  float convert_value = 0.0f;
-                  #pragma unroll
-                  for (int i = 0; i < 16; ++i) {
-                      convert_value += loaded[i] * static_cast<float>(mask[i]);
-                  }
-
-                  //auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-                  //float convert_value = sycl::select_from_group(
-                  //    sg,
-                  //    loaded,
-                  //    bit_value  // 直接使用bit_value作为索引
-                  //);
-                  dst[dst_base_idx + c] = static_cast<ElementMMA>(convert_value * scale_value);
-#endif                  
-
-#if 0                  
-if(thread_idx==60 && m_coord==0 && n_coord==0 && l_coord==0){
-  printf("tid = %d, m_coord = %d, n_coord = %d, l_coord = %d, n = %d, src_l = %d, dst_dx = %d, scale_idx = %d, scale_value = %f\n", thread_idx, m_coord, n_coord, l_coord, n, l, dst_base_idx+c, n * (BLK_K / GROUP_SIZE) + (dst_base_idx+c)/GROUP_SIZE, scale_value);
-  //print("  scale_value : "); print(scale_value); print("\n");
-}
-#endif                  
               }
             }
           }
@@ -524,37 +426,9 @@ if(thread_idx==60 && m_coord==0 && n_coord==0 && l_coord==0){
           #pragma unroll
           for (int l = 0; l < dst_loop_num; l++) {
             reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
-
-#if 0
-if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
-  printf("n = %d, dst_l = %d\n", n, l);
-  print("======================= dst vectorization: \n");
-      print("  dst_g_ptr   : "); print(&(reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n*dst_loop_num + l]));   print("\n");
-      print("  dst_ptr : "); print(&(reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l])); print("\n");
-  print("=======================\n");
-}
-#endif 
           }
         }
       };
-  #else //elemented load/store
-      auto dequant = [&] {
-        constexpr int N = decltype(cute::size<1>(mma_B))::value;
-        constexpr int K = decltype(cute::size(mma_B))::value / N;
-        float scale_value = fragment_scale(0);
-  
-        //#pragma unroll
-        //for(int i=0; i<K; i++) {
-        //  mma_B[i] = static_cast<ElementMMA>(quant_map[(reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i/2] >> (4 * ((i+1)%2))) & 0xf] * scale_value);
-        //}
-  
-        #pragma unroll
-        for(int i=0; i<K/2; i++) {
-          mma_B[i*2] = static_cast<ElementMMA>(quant_map[(reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i] >> 4) & 0xf] * scale_value);
-          mma_B[i*2+1] = static_cast<ElementMMA>(quant_map[reinterpret_cast<uint8_t*>(cute::raw_pointer_cast(dequant_frag.data()))[i] & 0xf] * scale_value);
-        }
-      };
-  #endif    
 #endif
 
     CUTLASS_PRAGMA_UNROLL
