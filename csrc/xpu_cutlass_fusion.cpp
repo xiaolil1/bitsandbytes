@@ -233,7 +233,7 @@ inline float dDequantizeNF4(unsigned char val) {
                      ? BlockIdxX() : BlockIdxY();
     const int l_coord = BlockIdxZ();
 
-#if 0 
+#if 1 
     //float* quant_map;
    //static constexpr std::array<float, 16> quant_map{};
    // {
@@ -428,19 +428,14 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
           int dst_base_idx = v * src_compress_size;
           int c = 0;
           uint8_t bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-          float converted_value_1 = quant_map_1[bit_value];
+          float converted_value_1 = quant_map[bit_value];
           float converted_value_2 = 0.f;
           #pragma unroll
           for (; c < src_compress_size-1;) {
               converted_value_2 = converted_value_1;
               c++;
               bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              converted_value_1 = quant_map_2[bit_value];
-              dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
-              converted_value_2 = converted_value_1;
-              c++;
-              bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              converted_value_1 = quant_map_1[bit_value];
+              converted_value_1 = quant_map[bit_value];
               dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
           }
           dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
@@ -455,19 +450,14 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
           int dst_base_idx = v * src_compress_size;
           int c = 0;
           uint8_t bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-          float converted_value_1 = quant_map_1[bit_value];
+          float converted_value_1 = quant_map[bit_value];
           float converted_value_2 = 0.f;
           #pragma unroll
           for (; c < src_compress_size-1;) {
               converted_value_2 = converted_value_1;
               c++;
               bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              converted_value_1 = quant_map_3[bit_value];
-              dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
-              converted_value_2 = converted_value_1;
-              c++;
-              bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              converted_value_1 = quant_map_4[bit_value];
+              converted_value_1 = quant_map[bit_value];
               dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
           }
           dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
