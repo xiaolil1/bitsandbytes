@@ -407,7 +407,12 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
       auto dequant = [&] {
         constexpr int N = decltype(cute::size<1>(mma_B))::value;
         constexpr int K = decltype(cute::size(mma_B))::value / N;
-  
+
+//int index = 2;
+//sycl::vec<float, 3> q_vec = {1,2,3};
+//auto mask = (sycl::vec<int, 3>(0,1,2) == index);
+//float value = sycl::reduce(q_vec * mask.convert<float>());
+
         using src_compress_type = uint32_t;
         using dst_compress_type = uint64_t;
         constexpr int src_compress_size = 8; //cute::sizeof_bits_v<src_compress_type> / cute::sizeof_bits_v<ElementB>; //16
@@ -418,7 +423,8 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         constexpr int dst_loop_num = 2; //K / dst_vec_size / dst_compress_size;
 
         //src_compress_type src[src_loop_num * src_vec_size];
-        ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
+        ElementMMA dst[dst_loop_num * dst_compress_size];
+        //ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
 
         //ElementMMA dst[dst_loop_num * dst_compress_size];
 
@@ -432,7 +438,6 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         #pragma unroll
         for (; v < src_vec_size-1;) {
           src_2 = src_1;
-          int dst_base_idx = v * src_compress_size;
           v++;
           src_1 = reinterpret_cast<src_compress_type*>(cute::raw_pointer_cast(dequant_frag.data()))[v];
           int c = 0;
@@ -445,15 +450,16 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
               c++;
               bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
               converted_value_1 = quant_map[bit_value];
-              dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
+              dst[c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
           }
-          dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
-          //reinterpret_cast<dst_compress_type*>(cute::raw_pointer_cast(mma_B.data()))[2*(v-1)] = reinterpret_cast<dst_compress_type*>(dst)[2*(v-1)];
-          //reinterpret_cast<dst_compress_type*>(cute::raw_pointer_cast(mma_B.data()))[2*(v-1)+1] = reinterpret_cast<dst_compress_type*>(dst)[2*(v-1)+1];
-          reinterpret_cast<sycl::vec<dst_compress_type, dst_loop_num>*>(cute::raw_pointer_cast(mma_B.data()))[v-1] = reinterpret_cast<sycl::vec<dst_compress_type, dst_loop_num>*>(dst)[v-1];
+          dst[c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
+          //reinterpret_cast<sycl::vec<dst_compress_type, 1>*>(cute::raw_pointer_cast(mma_B.data()))[2*(v-1)] = reinterpret_cast<sycl::vec<dst_compress_type, 1>*>(dst)[0];
+          //reinterpret_cast<sycl::vec<dst_compress_type, 1>*>(cute::raw_pointer_cast(mma_B.data()))[2*(v-1)+1] = reinterpret_cast<sycl::vec<dst_compress_type, 1>*>(dst)[1];
+          //reinterpret_cast<dst_compress_type*>(cute::raw_pointer_cast(mma_B.data()))[2*(v-1)] = reinterpret_cast<dst_compress_type*>(dst)[0];
+          //reinterpret_cast<dst_compress_type*>(cute::raw_pointer_cast(mma_B.data()))[2*(v-1)+1] = reinterpret_cast<dst_compress_type*>(dst)[1];
+          reinterpret_cast<sycl::vec<dst_compress_type, dst_loop_num>*>(cute::raw_pointer_cast(mma_B.data()))[v-1] = reinterpret_cast<sycl::vec<dst_compress_type, dst_loop_num>*>(dst)[0];
         }
         src_2 = src_1;
-        int dst_base_idx = v * src_compress_size;
         int c = 0;
         uint8_t bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
         float converted_value_1 = quant_map[bit_value];
@@ -464,12 +470,12 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
             c++;
             bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
             converted_value_1 = quant_map[bit_value];
-            dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
+            dst[c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
         }
-        dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
-        //reinterpret_cast<dst_compress_type*>(cute::raw_pointer_cast(mma_B.data()))[2*v] = reinterpret_cast<dst_compress_type*>(dst)[2*v];
-        //reinterpret_cast<dst_compress_type*>(cute::raw_pointer_cast(mma_B.data()))[2*v+1] = reinterpret_cast<dst_compress_type*>(dst)[2*v+1];
-        reinterpret_cast<sycl::vec<dst_compress_type, dst_loop_num>*>(cute::raw_pointer_cast(mma_B.data()))[v] = reinterpret_cast<sycl::vec<dst_compress_type, dst_loop_num>*>(dst)[v];
+        dst[c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
+        //reinterpret_cast<sycl::vec<dst_compress_type, 1>*>(cute::raw_pointer_cast(mma_B.data()))[2*v] = reinterpret_cast<sycl::vec<dst_compress_type, 1>*>(dst)[0];
+        //reinterpret_cast<sycl::vec<dst_compress_type, 1>*>(cute::raw_pointer_cast(mma_B.data()))[2*v+1] = reinterpret_cast<sycl::vec<dst_compress_type, 1>*>(dst)[1];
+        reinterpret_cast<sycl::vec<dst_compress_type, dst_loop_num>*>(cute::raw_pointer_cast(mma_B.data()))[v] = reinterpret_cast<sycl::vec<dst_compress_type, dst_loop_num>*>(dst)[0];
         
 //        reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[1] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[1];
 //        scale_value = fragment_scale(1);
