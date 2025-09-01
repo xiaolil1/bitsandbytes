@@ -468,10 +468,16 @@ if(thread_idx==0 && m_coord==0 && n_coord==0 && l_coord==0) {
               src_compress_type src_value = src[v];
               int dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
               #pragma unroll
-              for (int c = 0; c < src_compress_size; c++) {
-                  uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-                  float scale_value = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + c) / GROUP_SIZE);
-                  dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+              for (int c = 0; c < src_compress_size/2; c++) {
+                  //uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
+                  //float scale_value = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + c) / GROUP_SIZE);
+                  //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+                  uint8_t high = (src_value >> (4 * (c * 2 + 1))) & 0xf;
+                  uint8_t low = (src_value >> (4 * (c * 2))) & 0xf;
+                  float ts_high = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + 2 * c) / GROUP_SIZE);
+                  float ts_low = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + 2 * c + 1) / GROUP_SIZE);
+                  dst[dst_base_idx + 2 * c] = static_cast<ElementMMA>(quant_map[high] * ts_high);
+                  dst[dst_base_idx + 2 * c + 1] = static_cast<ElementMMA>(quant_map[low] * ts_low);
 #if 0
                   //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_alias(bit_value) * scale_value);
 
