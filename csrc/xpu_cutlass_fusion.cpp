@@ -61,10 +61,10 @@ static constexpr float quant_map_static[16] = {
 };
 #endif 
 
-using TileShape = Shape<_64, _64, _64>;
+using TileShape = Shape<_64, _128, _64>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
-                                  Layout<Shape<_2, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+                                  Layout<Shape<_2, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
 using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
 using GmemTiledCopyB = XE_2D_U4x32x16_LD_T; 
 constexpr int PipelineStages = 2;
@@ -246,10 +246,10 @@ inline float dDequantizeNF4(unsigned char val) {
         quant_map_[thread_idx + 16] = value;
         quant_map_[thread_idx + 32] = value;
         quant_map_[thread_idx + 48] = value;
-        quant_map_[thread_idx + 64] = value;
-        quant_map_[thread_idx + 80] = value;
-        quant_map_[thread_idx + 96] = value;
-        quant_map_[thread_idx + 112] = value;
+        //quant_map_[thread_idx + 64] = value;
+        //quant_map_[thread_idx + 80] = value;
+        //quant_map_[thread_idx + 96] = value;
+        //quant_map_[thread_idx + 112] = value;
       }
       barrier_arrive(3);
 	  //}
@@ -396,6 +396,7 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
   };
   #endif
 #else //register
+#if 0
       auto dequant = [&] (float* quant_map){
         constexpr int N = decltype(cute::size<1>(mma_B))::value;
         constexpr int K = decltype(cute::size(mma_B))::value / N;
@@ -437,14 +438,14 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
           src_1 = reinterpret_cast<src_compress_type*>(cute::raw_pointer_cast(dequant_frag.data()))[v];
           int c = 0;
           uint8_t bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-          float converted_value_1 = quant_map[bit_value + (dst_base_idx + c) % 2 * 16];
+          float converted_value_1 = quant_map[bit_value + (dst_base_idx + c) % 4 * 16];
           float converted_value_2 = 0.f;
           #pragma unroll
           for (; c < src_compress_size-1;) {
               converted_value_2 = converted_value_1;
               c++;
               bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              converted_value_1 = quant_map[bit_value + (dst_base_idx + c - 1) % 2 * 16];
+              converted_value_1 = quant_map[bit_value + (dst_base_idx + c - 1) % 4 * 16];
               dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
           }
           dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
@@ -459,14 +460,14 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         //int map_offset = dst_base_idx % 2 * 16;
         int c = 0;
         uint8_t bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-        float converted_value_1 = quant_map[bit_value + (dst_base_idx + c) % 2 * 16];
+        float converted_value_1 = quant_map[bit_value + (dst_base_idx + c) % 4 * 16];
         float converted_value_2 = 0.f;
         #pragma unroll
         for (; c < src_compress_size-1;) {
             converted_value_2 = converted_value_1;
             c++;
             bit_value = (src_2 >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-            converted_value_1 = quant_map[bit_value + (dst_base_idx + c - 1) % 2 * 16];
+            converted_value_1 = quant_map[bit_value + (dst_base_idx + c - 1) % 4 * 16];
             dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
         }
         dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
@@ -499,6 +500,60 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
 //        reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[1] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[1];
 
       };
+#else
+      auto dequant = [&] (float* quant_map){
+        constexpr int N = decltype(cute::size<1>(mma_B))::value;
+        constexpr int K = decltype(cute::size(mma_B))::value / N;
+        //if(cute::thread0) printf("scale num = %d\n", decltype(cute::size(fragment_scale))::value);
+  
+        using src_compress_type = uint64_t;
+        using dst_compress_type = uint64_t;
+        constexpr int src_compress_size = cute::sizeof_bits_v<src_compress_type> / cute::sizeof_bits_v<ElementB>; //16
+        constexpr int dst_compress_size = cute::sizeof_bits_v<dst_compress_type> / cute::sizeof_bits_v<ElementMMA>; //4
+        constexpr int src_vec_size = (K / src_compress_size) >= 16 ? 16 : K / src_compress_size; //4, 16 -> max vec_size of sycl::vec
+        constexpr int dst_vec_size = (K / dst_compress_size) >= 16 ? 16 : K / dst_compress_size; //16, 16 -> max vec_size of sycl::vec
+        constexpr int src_loop_num = K / src_vec_size / src_compress_size;
+        constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
+        src_compress_type src[src_vec_size];
+        ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
+
+
+        #pragma unroll
+        for (int n = 0; n < N; n++) {
+          //float scale_value = fragment_scale(0);
+          #pragma unroll
+          for (int l = 0; l < src_loop_num; l++) {
+            reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[n*src_loop_num + l];
+
+            #pragma unroll
+            for (int v = 0; v < src_vec_size; v++) {
+              src_compress_type src_value = src[v];
+              int dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
+              #pragma unroll
+              for (int c = 0; c < src_compress_size; c++) {
+                  uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
+                  float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
+                  //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value + (dst_base_idx + c) % 4 * 16] * scale_value);
+                  dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+
+//                  uint8_t high = (src_value >> (4 * (c * 2 + 1))) & 0xf;
+//                  uint8_t low = (src_value >> (4 * (c * 2))) & 0xf;
+//                  float ts_high = fragment_scale((n * BLK_K + dst_base_idx + 2 * c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));;
+//                  float ts_low = fragment_scale((n * BLK_K + dst_base_idx + 2 * c + 1) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));;
+//                  dst[dst_base_idx + 2 * c] = static_cast<ElementMMA>(quant_map[high] * ts_high);
+//                  dst[dst_base_idx + 2 * c + 1] = static_cast<ElementMMA>(quant_map[low] * ts_low);
+              }
+            }
+          }
+
+          #pragma unroll
+          for (int l = 0; l < dst_loop_num; l++) {
+            reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
+
+          }
+        }
+      };
+#endif
 #endif
 
     CUTLASS_PRAGMA_UNROLL
@@ -578,7 +633,7 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   //std::cout<<"group_size = "<<blocksize<<std::endl;
 
 #if 1
-  static constexpr int smem_size= (32) * sizeof(float) * 2 * 2;
+  static constexpr int smem_size= (32) * sizeof(float) * 2;// * 2;
 #else  
   static constexpr int smem_size = BLK_N * BLK_K * sizeof(ElementMMA) * 2 * 2; //aligned with 128B and will be reused for dequant src and dst.
 #endif  
