@@ -233,7 +233,7 @@ inline float dDequantizeNF4(unsigned char val) {
                      ? BlockIdxX() : BlockIdxY();
     const int l_coord = BlockIdxZ();
 
-#if 1 
+#if 0 
     //float* quant_map;
    //static constexpr std::array<float, 16> quant_map{};
    // {
@@ -246,7 +246,25 @@ inline float dDequantizeNF4(unsigned char val) {
 	  //}
 #else    
    //static constexpr std::array<float, 16> quant_map = {
-    constexpr float quant_map[16] = { 
+    constexpr float quant_map_1[16] = { 
+        -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
+        -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
+        0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
+        0.44070983f, 0.562617f, 0.72295684f, 1.0f
+    };
+    constexpr float quant_map_2[16] = { 
+        -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
+        -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
+        0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
+        0.44070983f, 0.562617f, 0.72295684f, 1.0f
+    };
+    constexpr float quant_map_3[16] = {
+        -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
+        -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
+        0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
+        0.44070983f, 0.562617f, 0.72295684f, 1.0f
+    };
+    constexpr float quant_map_4[16] = {
         -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
         -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
         0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
@@ -403,28 +421,33 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
 
         reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[0];
+        float scale_value = fragment_scale(0);//(dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
 
         #pragma unroll
         for (int v = 0; v < src_vec_size; v++) {
           int dst_base_idx = v * src_compress_size;
           int c = 0;
           uint8_t bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-          float scale_value = fragment_scale((dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
-          float converted_value_1 = quant_map[bit_value];
+          float converted_value_1 = quant_map_1[bit_value];
           float converted_value_2 = 0.f;
           #pragma unroll
           for (; c < src_compress_size-1;) {
               converted_value_2 = converted_value_1;
               c++;
               bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              scale_value = fragment_scale((dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
-              converted_value_1 = quant_map[bit_value];
+              converted_value_1 = quant_map_2[bit_value];
+              dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
+              converted_value_2 = converted_value_1;
+              c++;
+              bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
+              converted_value_1 = quant_map_1[bit_value];
               dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
           }
           dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
         }
         
         reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[1] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[1];
+        scale_value = fragment_scale(1);
         reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[0] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[0];
 
         #pragma unroll
@@ -432,16 +455,19 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
           int dst_base_idx = v * src_compress_size;
           int c = 0;
           uint8_t bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-          float scale_value = fragment_scale((dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
-          float converted_value_1 = quant_map[bit_value];
+          float converted_value_1 = quant_map_1[bit_value];
           float converted_value_2 = 0.f;
           #pragma unroll
           for (; c < src_compress_size-1;) {
               converted_value_2 = converted_value_1;
               c++;
               bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              scale_value = fragment_scale((dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
-              converted_value_1 = quant_map[bit_value];
+              converted_value_1 = quant_map_3[bit_value];
+              dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
+              converted_value_2 = converted_value_1;
+              c++;
+              bit_value = (src[v] >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
+              converted_value_1 = quant_map_4[bit_value];
               dst[dst_base_idx + c-1] = static_cast<ElementMMA>(converted_value_2 * scale_value);
           }
           dst[dst_base_idx + c] = static_cast<ElementMMA>(converted_value_1 * scale_value);
