@@ -152,7 +152,8 @@ public:
     float *datatype; //LUT
     int group_size;
     float* absmax;
-	  
+    float* quant_map_const;  
+
     ProblemShape problem_shape{};
 
   	Copy_A tiled_copy_a;
@@ -250,8 +251,8 @@ inline float dDequantizeNF4(unsigned char val) {
       barrier_arrive(3);
 	  //}
 #else    
-   //static constexpr std::array<float, 16> quant_map = {
-    float __attribute__((opencl_private)) quant_map[16] = { 
+   static constexpr std::array<float, 16> quant_map_ = {
+   // float __attribute__((opencl_private)) quant_map[16] = { 
         -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
         -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
         0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
@@ -530,7 +531,8 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
                   uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
                   float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
                   //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value + (dst_base_idx + c) % 4 * 16] * scale_value);
-                  dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+                  //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value] * scale_value);
+                  dst[dst_base_idx + c] = static_cast<ElementMMA>(params.quant_map_const[bit_value] * scale_value);
 
 //                  uint8_t high = (src_value >> (4 * (c * 2 + 1))) & 0xf;
 //                  uint8_t low = (src_value >> (4 * (c * 2))) & 0xf;
@@ -696,6 +698,19 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   //printf("Host Grid: (%d, %d, %d)\n", grid.x, grid.y, grid.z);
   //printf("Host Block: (%d, %d, %d)\n", block.x, block.y, block.z);
 
+
+  float quant_map[16] = {
+      -1.0f, -0.6961928f, -0.52507305f, -0.39491749f,
+      -0.28444138f, -0.18477343f, -0.09105004f, 0.0f,
+      0.0795803f, 0.1609302f, 0.2461123f, 0.33791524f,
+      0.44070983f, 0.562617f, 0.72295684f, 1.0f
+  };
+
+  syclcompat::constant_memory<float, 1> const_mem(16);
+  syclcompat::memcpy(const_mem.get_ptr(), quant_map, sizeof(float) * 16);
+
+
+
   auto kernel_props = [] {
       return syclcompat::experimental::kernel_properties{
         sycl::ext::oneapi::experimental::sub_group_size<DispatchPolicy::SubgroupSize>
@@ -707,8 +722,10 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   syclcompat::experimental::launch_policy policy{
     sycl_grid, sycl_block, launch_props, kernel_props
   };
-
-  syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);
+  
+  float* const_mem_ptr = const_mem.get_ptr();
+  params.quant_map_const = const_mem_ptr;
+  syclcompat::experimental::launch<device_kernel<GemmKernel>>(policy, q, params);//, const_mem.get_ptr());
 }
 
 template void gemm_4bit_cutlass<sycl::ext::oneapi::bfloat16, 16>(

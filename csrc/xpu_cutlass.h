@@ -101,6 +101,18 @@ private:
 };
 #endif
 
+template <typename Operator, float* const_mem>
+CUTLASS_GLOBAL
+void bnb_device_kernel(typename Operator::Params const& params)
+{
+  // Dynamic shared memory base pointer
+  char* smem = static_cast<char*>(sycl::ext::oneapi::experimental::get_work_group_scratch_memory());
+  //float* const_mem = syclcompat::constant_memory<float, 1>::get_ptr();
+  Operator op;
+  op(params, smem, const_mem);
+  cutlass::arch::synclog_print();
+}
+
 #if 1
 template <typename T, int BITS>
 void gemv_4bit_inference_cutlass_cute(int m, int n, int k, T *A, T *B,
