@@ -240,12 +240,8 @@ inline float dDequantizeNF4(unsigned char val) {
       // Load Dequatize LUT and save to SLM, 16 for 4bits
       alignas(128) float* quant_map_ = reinterpret_cast<float*>(smem_buf);
       //alignas(16) float* quant_map_2 = reinterpret_cast<float*>(smem_buf + 32*4);
-      if (thread_idx < 16) {
-        float value = params.datatype[thread_idx];
-        quant_map_[thread_idx] = value; 
-        quant_map_[thread_idx + 16] = value;
-        quant_map_[thread_idx + 32] = value;
-        quant_map_[thread_idx + 48] = value;
+      if (thread_idx < 64) {
+        quant_map_[thread_idx] = params.datatype[thread_idx % 16]; 
         //quant_map_[thread_idx + 64] = value;
         //quant_map_[thread_idx + 80] = value;
         //quant_map_[thread_idx + 96] = value;
@@ -563,6 +559,7 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
     }
 
     int map_offset = 16 * (sg_idx % 4);
+    //int map_offset = 16 * ((sg_idx ^ (sg_idx >> 2)) % 4);
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
 #if 1 //SLM: 0, register: 1     
