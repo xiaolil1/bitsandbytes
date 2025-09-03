@@ -512,6 +512,8 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         src_compress_type src[src_vec_size];
         ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
 
+        int lut_id = start_lut_id;
+
 
         #pragma unroll
         for (int n = 0; n < N; n++) {
@@ -529,7 +531,8 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
                   uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
                   float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
                   //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value + (dst_base_idx + c) % 4 * 16] * scale_value);
-                  dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[start_lut_id][bit_value] * scale_value);
+                  dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
+                  //lut_id = (lut_id + 1) % 4;
                   //dst[dst_base_idx + c] = static_cast<ElementMMA>(params.quant_map_const[bit_value] * scale_value);
 
 //                  uint8_t high = (src_value >> (4 * (c * 2 + 1))) & 0xf;
@@ -539,6 +542,7 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
 //                  dst[dst_base_idx + 2 * c] = static_cast<ElementMMA>(quant_map[high] * ts_high);
 //                  dst[dst_base_idx + 2 * c + 1] = static_cast<ElementMMA>(quant_map[low] * ts_low);
               }
+                  lut_id = (lut_id + 1) % 4;
             }
           }
 
