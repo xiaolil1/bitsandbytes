@@ -101,7 +101,8 @@ static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize;
 //static constexpr auto FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape());
 //static constexpr auto FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape());
 //static constexpr auto FragmentSize = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize;
-  
+static constexpr int LUT_NUM = 4;
+
 // Design Scheduler 
 using TileScheduler_ = PersistentScheduler;
 static_assert(cute::is_void_v<TileScheduler_> or cute::is_same_v<TileScheduler_, PersistentScheduler>, "Intel PVC does not support specializing the tile scheduler.");
@@ -243,7 +244,7 @@ inline float dDequantizeNF4(unsigned char val) {
 //    barrier_arrive(3);
     //PVC SLM 64 banks -> 4 LUTs
     alignas(128) float (*quant_map_)[16] = reinterpret_cast<float(*)[16]>(smem_buf);
-    if (thread_idx < 64) {
+    if (thread_idx < 16 * LUT_NUM) {
       quant_map_[thread_idx / 16][thread_idx % 16] = params.datatype[thread_idx % 16]; 
     }
     barrier_arrive(3);
@@ -532,7 +533,7 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
                   float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
                   //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value + (dst_base_idx + c) % 4 * 16] * scale_value);
                   dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
-                  //lut_id = (lut_id + 1) % 4;
+                  lut_id = (lut_id + 1) % LUT_NUM;
                   //dst[dst_base_idx + c] = static_cast<ElementMMA>(params.quant_map_const[bit_value] * scale_value);
 
 //                  uint8_t high = (src_value >> (4 * (c * 2 + 1))) & 0xf;
@@ -542,7 +543,7 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
 //                  dst[dst_base_idx + 2 * c] = static_cast<ElementMMA>(quant_map[high] * ts_high);
 //                  dst[dst_base_idx + 2 * c + 1] = static_cast<ElementMMA>(quant_map[low] * ts_low);
               }
-                  lut_id = (lut_id + 1) % 4;
+                  //lut_id = (lut_id + 1) % LUT_NUM;
             }
           }
 
@@ -565,7 +566,7 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
     //int map_offset = 16 * (sg_idx % 4);
     //int map_offset = 16 * ((sg_idx ^ (sg_idx >> 2)) % 4);
     //int lut_id = sg_idx % 4;
-    int start_lut_id = sg_idx % 4;
+    int start_lut_id = sg_idx % LUT_NUM;
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
 #if 1 //SLM: 0, register: 1     
@@ -638,7 +639,7 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   //std::cout<<"group_size = "<<blocksize<<std::endl;
 
 #if 1
-  static constexpr int smem_size= (32) * sizeof(float) * 2;// * 2;
+  static constexpr int smem_size= (16) * sizeof(float) * LUT_NUM;// * 2;
 #else  
   static constexpr int smem_size = BLK_N * BLK_K * sizeof(ElementMMA) * 2 * 2; //aligned with 128B and will be reused for dequant src and dst.
 #endif  
