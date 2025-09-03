@@ -496,11 +496,9 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
 
       };
 #else
-      //auto dequant = [&] (float* quant_map){
       auto dequant = [&] (int start_lut_id){
         constexpr int N = decltype(cute::size<1>(mma_B))::value;
         constexpr int K = decltype(cute::size(mma_B))::value / N;
-        //if(cute::thread0) printf("scale num = %d\n", decltype(cute::size(fragment_scale))::value);
   
         using src_compress_type = uint64_t;
         using dst_compress_type = uint64_t;
@@ -518,7 +516,6 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
 
         #pragma unroll
         for (int n = 0; n < N; n++) {
-          //float scale_value = fragment_scale(0);
           #pragma unroll
           for (int l = 0; l < src_loop_num; l++) {
             reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[n*src_loop_num + l];
@@ -531,20 +528,9 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
               for (int c = 0; c < src_compress_size; c++) {
                   uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
                   float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
-                  //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value + (dst_base_idx + c) % 4 * 16] * scale_value);
                   dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
-                  //printf("sg_idx = %d, thread_idx = %d, dst_id = %d, start_lut_id = %d, lut_id = %d\n", sg_idx, thread_idx, dst_base_idx + c, start_lut_id, lut_id);
                   lut_id = (lut_id + 1) % LUT_NUM;
-                  //dst[dst_base_idx + c] = static_cast<ElementMMA>(params.quant_map_const[bit_value] * scale_value);
-
-//                  uint8_t high = (src_value >> (4 * (c * 2 + 1))) & 0xf;
-//                  uint8_t low = (src_value >> (4 * (c * 2))) & 0xf;
-//                  float ts_high = fragment_scale((n * BLK_K + dst_base_idx + 2 * c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));;
-//                  float ts_low = fragment_scale((n * BLK_K + dst_base_idx + 2 * c + 1) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));;
-//                  dst[dst_base_idx + 2 * c] = static_cast<ElementMMA>(quant_map[high] * ts_high);
-//                  dst[dst_base_idx + 2 * c + 1] = static_cast<ElementMMA>(quant_map[low] * ts_low);
               }
-                  //lut_id = (lut_id + 1) % LUT_NUM;
             }
           }
 
