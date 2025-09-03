@@ -235,21 +235,18 @@ inline float dDequantizeNF4(unsigned char val) {
     const int l_coord = BlockIdxZ();
 
 #if 1 
-    //float* quant_map;
-   //static constexpr std::array<float, 16> quant_map{};
-   // {
-      // Load Dequatize LUT and save to SLM, 16 for 4bits
-      alignas(128) float* quant_map_ = reinterpret_cast<float*>(smem_buf);
-      //alignas(16) float* quant_map_2 = reinterpret_cast<float*>(smem_buf + 32*4);
-      if (thread_idx < 64) {
-        quant_map_[thread_idx] = params.datatype[thread_idx % 16]; 
-        //quant_map_[thread_idx + 64] = value;
-        //quant_map_[thread_idx + 80] = value;
-        //quant_map_[thread_idx + 96] = value;
-        //quant_map_[thread_idx + 112] = value;
-      }
-      barrier_arrive(3);
-	  //}
+    // Load Dequatize LUT and save to SLM, 16 for 4bits
+//    alignas(128) float* quant_map_ = reinterpret_cast<float*>(smem_buf);
+//    if (thread_idx < 64) {
+//      quant_map_[thread_idx] = params.datatype[thread_idx % 16]; 
+//    }
+//    barrier_arrive(3);
+    //PVC SLM 64 banks -> 4 LUTs
+    alignas(128) float (*quant_map_)[16] = reinterpret_cast<float(*)[16]>(smem_buf);
+    if (thread_idx < 64) {
+      quant_map_[thread_idx / 16][thread_idx % 16] = params.datatype[thread_idx % 16]; 
+    }
+    barrier_arrive(3);
 #else    
    static constexpr std::array<float, 16> quant_map_ = {
    // float __attribute__((opencl_private)) quant_map[16] = { 
@@ -560,8 +557,9 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
       prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
 
-    int map_offset = 16 * (sg_idx % 4);
+    //int map_offset = 16 * (sg_idx % 4);
     //int map_offset = 16 * ((sg_idx ^ (sg_idx >> 2)) % 4);
+    int lut_id = sg_idx % 4;
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
 #if 1 //SLM: 0, register: 1     
@@ -569,7 +567,8 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
       copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
       //dequant((sg_idx % 4 ) < 2 ? quant_map_1 : quant_map_2);
-      dequant(quant_map_ + map_offset);
+      //dequant(quant_map_ + map_offset);
+      dequant(quant_map_[lut_id]);
 #else
       copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
