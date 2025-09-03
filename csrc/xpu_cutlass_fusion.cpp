@@ -533,6 +533,7 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
                   float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
                   //dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[bit_value + (dst_base_idx + c) % 4 * 16] * scale_value);
                   dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
+                  //printf("sg_idx = %d, thread_idx = %d, dst_id = %d, start_lut_id = %d, lut_id = %d\n", sg_idx, thread_idx, dst_base_idx + c, start_lut_id, lut_id);
                   lut_id = (lut_id + 1) % LUT_NUM;
                   //dst[dst_base_idx + c] = static_cast<ElementMMA>(params.quant_map_const[bit_value] * scale_value);
 
@@ -567,6 +568,8 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
     //int map_offset = 16 * ((sg_idx ^ (sg_idx >> 2)) % 4);
     //int lut_id = sg_idx % 4;
     int start_lut_id = sg_idx % LUT_NUM;
+    //int start_lut_id = (sg_idx + (sg_idx >> 2)) & 3;
+    //printf("sg_idx = %d, start_lut_id = %d\n", sg_idx, start_lut_id);
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
 #if 1 //SLM: 0, register: 1     
