@@ -509,8 +509,8 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         constexpr int src_loop_num = K / src_vec_size / src_compress_size;
         constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
         src_compress_type src[src_vec_size];
-        //ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
-        alignas(64) ElementMMA* dst = reinterpret_cast<ElementMMA*>(smem_buf + 16 * sizeof(float) * LUT_NUM + thread_idx * decltype(cute::size(mma_B))::value * sizeof(ElementMMA));
+        ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
+        //alignas(64) ElementMMA* dst = reinterpret_cast<ElementMMA*>(smem_buf + 16 * sizeof(float) * LUT_NUM + thread_idx * decltype(cute::size(mma_B))::value * sizeof(ElementMMA));
 
         int lut_id = start_lut_id;
 
@@ -634,8 +634,8 @@ void gemm_4bit_cutlass(int m, int n, int k, int l, T *A, unsigned char *B,
   //std::cout<<"group_size = "<<blocksize<<std::endl;
 
 #if 1
-  //static constexpr int smem_size= (16) * sizeof(float) * LUT_NUM;
-  static constexpr int smem_size= (16) * sizeof(float) * LUT_NUM + BLK_N * BLK_K * sizeof(ElementMMA)*2;
+  static constexpr int smem_size= (16) * sizeof(float) * LUT_NUM;
+  //static constexpr int smem_size= (16) * sizeof(float) * LUT_NUM + BLK_N * BLK_K * sizeof(ElementMMA)*2;
 #else  
   static constexpr int smem_size = BLK_N * BLK_K * sizeof(ElementMMA) * 2 * 2; //aligned with 128B and will be reused for dequant src and dst.
 #endif  
