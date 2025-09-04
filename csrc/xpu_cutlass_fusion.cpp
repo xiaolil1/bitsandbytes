@@ -532,9 +532,9 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
                   dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
                   lut_id = (lut_id + 1) % LUT_NUM;
             } 
-            v++;
             #pragma unroll
             for (; v < src_vec_size - 1;) {
+              v++;
               src_compress_type src_value = src[v];
               dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
               //int dst_base_idx = 0;
