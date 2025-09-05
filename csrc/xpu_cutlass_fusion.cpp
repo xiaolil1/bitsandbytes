@@ -65,7 +65,7 @@ using TileShape = Shape<_64, _128, _64>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                   Layout<Shape<_2, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
-using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
+using GmemTiledCopyA = XE_2D_U16x16x32_LD_N;
 using GmemTiledCopyB = XE_2D_U4x32x16_LD_T; 
 constexpr int PipelineStages = 2;
 static constexpr auto GROUP_SIZE=64; //Block Quant Size
@@ -509,12 +509,13 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
         constexpr int src_loop_num = K / src_vec_size / src_compress_size;
         constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size;
         src_compress_type src[src_vec_size];
-        ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
-        //alignas(64) ElementMMA* dst = reinterpret_cast<ElementMMA*>(smem_buf + 16 * sizeof(float) * LUT_NUM + thread_idx * decltype(cute::size(mma_B))::value * sizeof(ElementMMA));
 
         int lut_id = start_lut_id;
-
-//if(cute::thread0()) printf("K = %d, N = %d, src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_vec_size = %d, src_loop_num = %d, dst_loop_num = %d\n", K, N, src_compress_size, dst_compress_size, src_vec_size, dst_vec_size, src_loop_num, dst_loop_num);
+//if(sg_idx == 0){
+//  for (int i = 0; i < 64; i++){
+//    printf("tid = %d, dequant_frag ptr[%d] = %x, mma_B ptr[%d] = %x\n",thread_idx, i, cute::raw_pointer_cast(dequant_frag.data()+i),i, cute::raw_pointer_cast(mma_B.data()+i));
+//  }
+//}
 
         #pragma unroll
         for (int n = 0; n < N; n++) {
@@ -522,52 +523,24 @@ printf("src_compress_size = %d, dst_compress_size = %d, src_vec_size = %d, dst_v
           for (int l = 0; l < src_loop_num; l++) {
             reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(src)[0] = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag.data()))[n*src_loop_num + l];
 
-
-            src_compress_type src_value = src[0];
-            int dst_base_idx = l * src_vec_size * src_compress_size + 0 * src_compress_size;
             #pragma unroll
-            for (int c = 0; c < src_compress_size; c++) {
-                  uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-                  float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
-                  dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
+            for (int v = 0; v < src_vec_size; v++) {
+              src_compress_type src_value = src[v];
+              int dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
+              #pragma unroll
+              for (int c = 0; c < src_compress_size/2; c++) {
+                  uint8_t high = (src_value >> (4 * (c * 2 + 1))) & 0xf;
+                  uint8_t low = (src_value >> (4 * (c * 2))) & 0xf;
+                  float ts_high = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + 2 * c) / GROUP_SIZE);
+                  float ts_low = fragment_scale(n * (BLK_K / GROUP_SIZE) + (dst_base_idx + 2 * c + 1) / GROUP_SIZE);
+
+                  uint16_t high_bits = sycl::bit_cast<uint16_t>(static_cast<ElementMMA>(quant_map_[lut_id][high] * ts_high));
+                  uint16_t low_bits = sycl::bit_cast<uint16_t>(static_cast<ElementMMA>(quant_map_[lut_id][low] * ts_low));
+                  reinterpret_cast<uint32_t*>(cute::raw_pointer_cast(mma_B.data()))[n*src_loop_num*src_compress_size/2 + l * src_vec_size*src_compress_size/2 + v*src_compress_size/2 + c] = (static_cast<uint32_t>(low_bits) << 16) | high_bits;
+
                   lut_id = (lut_id + 1) % LUT_NUM;
+              }
             }
-            
-            src_value = src[1];
-            dst_base_idx = l * src_vec_size * src_compress_size + 1 * src_compress_size;
-            #pragma unroll
-            for (int c = 0; c < src_compress_size; c++) {
-                  uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-                  float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
-                  dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
-                  lut_id = (lut_id + 1) % LUT_NUM;
-            }
-            reinterpret_cast<sycl::vec<dst_compress_type, 4>*>(cute::raw_pointer_cast(mma_B.data()))[n*src_loop_num + l * src_vec_size + 0] = reinterpret_cast<sycl::vec<dst_compress_type, 4>*>(dst)[0];
-
-            src_value = src[2];
-            dst_base_idx = l * src_vec_size * src_compress_size + 2 * src_compress_size;
-            #pragma unroll
-            for (int c = 0; c < src_compress_size; c++) {
-                uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-                float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
-                dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
-                lut_id = (lut_id + 1) % LUT_NUM;
-            }
-
-            reinterpret_cast<sycl::vec<dst_compress_type, 4>*>(cute::raw_pointer_cast(mma_B.data()))[n*src_loop_num + l * src_vec_size + 1] = reinterpret_cast<sycl::vec<dst_compress_type, 4>*>(dst)[1];
-
-            src_value = src[3];
-            dst_base_idx = l * src_vec_size * src_compress_size + 3 * src_compress_size;
-            #pragma unroll
-            for (int c = 0; c < src_compress_size; c++) {
-                uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-                float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
-                dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
-                lut_id = (lut_id + 1) % LUT_NUM;
-            }
-
-            reinterpret_cast<sycl::vec<dst_compress_type, 4>*>(cute::raw_pointer_cast(mma_B.data()))[n*src_loop_num + l * src_vec_size + 2] = reinterpret_cast<sycl::vec<dst_compress_type, 4>*>(dst)[2];
-            reinterpret_cast<sycl::vec<dst_compress_type, 4>*>(cute::raw_pointer_cast(mma_B.data()))[n*src_loop_num + l * src_vec_size + 3] = reinterpret_cast<sycl::vec<dst_compress_type, 4>*>(dst)[3];
           }
         }
       };
