@@ -256,7 +256,7 @@ public:
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(params.k));
     int prefetch_k = k_start_idx;
 
-    auto dequant = [&] (int start_lut_id, int k_tile){
+    auto dequant_a = [&] (int start_lut_id){
       constexpr int N = decltype(cute::size<1>(mma_B_a))::value;
       constexpr int K = decltype(cute::size(mma_B_a))::value / N;
   
@@ -279,7 +279,7 @@ public:
 
           #pragma unroll
           for (int v = 0; v < src_vec_size; v++) {
-            src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(k_tile % 2 != 0 ? dequant_frag_a.data() : dequant_frag_b.data()))[n*src_loop_num + l][v];
+            src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag_a.data()))[n*src_loop_num + l][v];
             int dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
             #pragma unroll
             for (int c = 0; c < src_compress_size; c++) {
@@ -293,7 +293,49 @@ public:
 
         #pragma unroll
         for (int l = 0; l < dst_loop_num; l++) {
-          reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(k_tile % 2 != 0 ? mma_B_a.data() : mma_B_b.data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
+          reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B_a.data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
+        }
+      }
+    };
+
+    auto dequant_b = [&] (int start_lut_id){
+      constexpr int N = decltype(cute::size<1>(mma_B_a))::value;
+      constexpr int K = decltype(cute::size(mma_B_a))::value / N;
+
+      using src_compress_type = uint32_t;
+      using dst_compress_type = uint32_t;
+      constexpr int src_compress_size = cute::sizeof_bits_v<src_compress_type> / cute::sizeof_bits_v<ElementB>; //16
+      constexpr int dst_compress_size = cute::sizeof_bits_v<dst_compress_type> / cute::sizeof_bits_v<ElementMMA>; //4
+      constexpr int src_vec_size = 4;
+      constexpr int src_loop_num = K / src_vec_size / src_compress_size;
+
+      constexpr int dst_vec_size = 4; //src_vec_size;
+      constexpr int dst_loop_num = K / dst_vec_size / dst_compress_size; //src_loop_num;
+      ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
+
+      int lut_id = start_lut_id;
+      #pragma unroll
+      for (int n = 0; n < N; n++) {
+        #pragma unroll
+        for (int l = 0; l < src_loop_num; l++) {
+
+          #pragma unroll
+          for (int v = 0; v < src_vec_size; v++) {
+            src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag_b.data()))[n*src_loop_num + l][v];
+            int dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
+            #pragma unroll
+            for (int c = 0; c < src_compress_size; c++) {
+              uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
+              float scale_value = fragment_scale((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE)));
+              dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
+              lut_id = (lut_id + 1) % LUT_NUM;
+            }
+          }
+        }
+
+        #pragma unroll
+        for (int l = 0; l < dst_loop_num; l++) {
+          reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B_b.data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
         }
       }
     };
@@ -311,20 +353,22 @@ public:
     copy(params.tiled_copy_a, tAgA(_,_,_,k_start_idx), frag_copy_A);
 
     for (int k_tile = k_start_idx + 1, k_s = 0 + 1; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
-      if(k_tile % 2 != 0){
+      bool is_odd_tile = k_tile % 2 != 0;
+
+      if(is_odd_tile){
         copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B_b);
       } else {
         copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B_a);
       }
 
-      dequant(start_lut_id, k_tile);
+      is_odd_tile ? dequant_a(start_lut_id) : dequant_b(start_lut_id);
 
       if (prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
       
-      cute::gemm(tiled_mma, mma_A,  k_tile % 2 != 0 ? mma_B_a : mma_B_b, accumulators);
+      cute::gemm(tiled_mma, mma_A,  is_odd_tile ? mma_B_a : mma_B_b, accumulators);
       barrier_wait(3);
 
       copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
