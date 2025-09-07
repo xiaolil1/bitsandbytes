@@ -252,7 +252,7 @@ public:
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(params.k));
     int prefetch_k = k_start_idx;
 
-      auto dequant = [&] (int start_lut_id, int k_tile, int k_s){
+      auto copy_and_dequant = [&] (int start_lut_id, int k_tile, int k_s){
         copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
         copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
         copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
@@ -296,6 +296,11 @@ public:
             reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B.data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
           }
         }
+
+        if (prefetch_k < k_tile_count) {
+          prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
+          prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
+        }
       };
 
     CUTLASS_PRAGMA_UNROLL
@@ -311,12 +316,12 @@ public:
       //copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
       //copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
 
-      dequant(start_lut_id, k_tile, k_s);
+      copy_and_dequant(start_lut_id, k_tile, k_s);
 
-      if (prefetch_k < k_tile_count) {
-        prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
-        prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
-      }
+      //if (prefetch_k < k_tile_count) {
+      //  prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
+      //  prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
+      //}
 
       cute::gemm(tiled_mma, mma_A, mma_B, accumulators);
       barrier_wait(3);
