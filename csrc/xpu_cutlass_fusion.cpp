@@ -252,7 +252,11 @@ public:
 	  const int k_start_idx = crd2idx((*k_tile_iter), make_shape(params.k));
     int prefetch_k = k_start_idx;
 
-      auto dequant = [&] (int start_lut_id){
+      auto dequant = [&] (int start_lut_id, int k_tile, int k_s){
+        copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
+        copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
+        copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
+
         constexpr int N = decltype(cute::size<1>(mma_B))::value;
         constexpr int K = decltype(cute::size(mma_B))::value / N;
   
@@ -303,11 +307,11 @@ public:
     int start_lut_id = sg_idx % LUT_NUM;
 
     for (int k_tile = k_start_idx, k_s = 0; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
-      copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
-      copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
-      copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
+      //copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), frag_copy_B);
+      //copy(params.tiled_copy_scale, tSgS(_, _, _, (k_start_idx + k_s) * BLK_K/params.group_size), frag_copy_Scale);
+      //copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), frag_copy_A);
 
-      dequant(start_lut_id);
+      dequant(start_lut_id, k_tile, k_s);
 
       if (prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
