@@ -262,22 +262,21 @@ public:
     Tensor frag_copy_B_b = thr_copy_B.retile_D(dequant_frag_b);
     Tensor frag_copy_Scale_b = thr_copy_scale.retile_D(fragment_scale_b);
 
-//    cute::tuple<decltype(mma_A_a), decltype(mma_A_b)> mma_A(mma_A_a, mma_A_b);
-//    cute::tuple<decltype(mma_B_a), decltype(mma_B_b)> mma_B(mma_B_a, mma_B_b);
-//    cute::tuple<decltype(dequant_frag_a), decltype(dequant_frag_b)> dequant_frag(dequant_frag_a, dequant_frag_b);
-//    cute::tuple<decltype(fragment_scale_a), decltype(fragment_scale_b)> fragment_scale(fragment_scale_a, fragment_scale_b);
-//    cute::tuple<decltype(frag_copy_A_a), decltype(frag_copy_A_b)> frag_copy_A(frag_copy_A_a, frag_copy_A_b);
-//    cute::tuple<decltype(frag_copy_B_a), decltype(frag_copy_B_b)> frag_copy_B(frag_copy_B_a, frag_copy_B_b);
-//    cute::tuple<decltype(frag_copy_Scale_a), decltype(frag_copy_Scale_b)> frag_copy_Scale(frag_copy_Scale_a, frag_copy_Scale_b);
-////auto& mma_A_0 = cute::get<0>(mma_A_tuple);  // 引用 mma_A_a
-////auto& mma_A_1 = cute::get<1>(mma_A_tuple);  // 引用 mma_A_b
-    decltype(mma_A_a)* mma_A[] = {&mma_A_a, &mma_A_b};
-    decltype(mma_B_a)* mma_B[] = {&mma_B_a, &mma_B_b};
-    decltype(dequant_frag_a)* dequant_frag[] = {&dequant_frag_a, &dequant_frag_b};
-    decltype(fragment_scale_a)* fragment_scale[] = {&fragment_scale_a, &fragment_scale_b};
-    decltype(frag_copy_A_a)* frag_copy_A[] = {&frag_copy_A_a, &frag_copy_A_b};
-    decltype(frag_copy_B_a)* frag_copy_B[] = {&frag_copy_B_a, &frag_copy_B_b};
-    decltype(frag_copy_Scale_a)* frag_copy_Scale[] = {&frag_copy_Scale_a, &frag_copy_Scale_b};
+    //decltype(mma_A_a)* mma_A[] = {&mma_A_a, &mma_A_b};
+    //decltype(mma_B_a)* mma_B[] = {&mma_B_a, &mma_B_b};
+    //decltype(dequant_frag_a)* dequant_frag[] = {&dequant_frag_a, &dequant_frag_b};
+    //decltype(fragment_scale_a)* fragment_scale[] = {&fragment_scale_a, &fragment_scale_b};
+    //decltype(frag_copy_A_a)* frag_copy_A[] = {&frag_copy_A_a, &frag_copy_A_b};
+    //decltype(frag_copy_B_a)* frag_copy_B[] = {&frag_copy_B_a, &frag_copy_B_b};
+    //decltype(frag_copy_Scale_a)* frag_copy_Scale[] = {&frag_copy_Scale_a, &frag_copy_Scale_b};
+
+    cute::array<decltype(mma_A_a)*, 2> mma_A = {&mma_A_a, &mma_A_b};
+    cute::array<decltype(mma_B_a)*, 2> mma_B = {&mma_B_a, &mma_B_b};
+    cute::array<decltype(dequant_frag_a)*, 2> dequant_frag = {&dequant_frag_a, &dequant_frag_b};
+    cute::array<decltype(fragment_scale_a)*, 2> fragment_scale = {&fragment_scale_a, &fragment_scale_b};
+    cute::array<decltype(frag_copy_A_a)*, 2> frag_copy_A = {&frag_copy_A_a, &frag_copy_A_b};
+    cute::array<decltype(frag_copy_B_a)*, 2> frag_copy_B = {&frag_copy_B_a, &frag_copy_B_b};
+    cute::array<decltype(frag_copy_Scale_a)*, 2> frag_copy_Scale = {&frag_copy_Scale_a, &frag_copy_Scale_b};
 
 #endif    
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
@@ -340,7 +339,8 @@ public:
 
           #pragma unroll
           for (int v = 0; v < src_vec_size; v++) {
-            src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag[buffer_idx]->data()))[n*src_loop_num + l][v];
+            //src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag[buffer_idx]->data()))[n*src_loop_num + l][v];
+            src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast((*dequant_frag[buffer_idx]).data()))[n*src_loop_num + l][v];
             int dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
   
             #pragma unroll
@@ -356,7 +356,7 @@ public:
   
         #pragma unroll
         for (int l = 0; l < dst_loop_num; l++) {
-          reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B[buffer_idx]->data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
+          reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast((*mma_B[buffer_idx]).data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
         }
       }
     };
