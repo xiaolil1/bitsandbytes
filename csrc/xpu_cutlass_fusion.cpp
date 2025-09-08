@@ -262,15 +262,22 @@ public:
     Tensor frag_copy_B_b = thr_copy_B.retile_D(dequant_frag_b);
     Tensor frag_copy_Scale_b = thr_copy_scale.retile_D(fragment_scale_b);
 
-    cute::tuple<decltype(mma_A_a), decltype(mma_A_b)> mma_A(mma_A_a, mma_A_b);
-    cute::tuple<decltype(mma_B_a), decltype(mma_B_b)> mma_B(mma_B_a, mma_B_b);
-    cute::tuple<decltype(dequant_frag_a), decltype(dequant_frag_b)> dequant_frag(dequant_frag_a, dequant_frag_b);
-    cute::tuple<decltype(fragment_scale_a), decltype(fragment_scale_b)> fragment_scale(fragment_scale_a, fragment_scale_b);
-    cute::tuple<decltype(frag_copy_A_a), decltype(frag_copy_A_b)> frag_copy_A(frag_copy_A_a, frag_copy_A_b);
-    cute::tuple<decltype(frag_copy_B_a), decltype(frag_copy_B_b)> frag_copy_B(frag_copy_B_a, frag_copy_B_b);
-    cute::tuple<decltype(frag_copy_Scale_a), decltype(frag_copy_Scale_b)> frag_copy_Scale(frag_copy_Scale_a, frag_copy_Scale_b);
-//auto& mma_A_0 = cute::get<0>(mma_A_tuple);  // 引用 mma_A_a
-//auto& mma_A_1 = cute::get<1>(mma_A_tuple);  // 引用 mma_A_b
+//    cute::tuple<decltype(mma_A_a), decltype(mma_A_b)> mma_A(mma_A_a, mma_A_b);
+//    cute::tuple<decltype(mma_B_a), decltype(mma_B_b)> mma_B(mma_B_a, mma_B_b);
+//    cute::tuple<decltype(dequant_frag_a), decltype(dequant_frag_b)> dequant_frag(dequant_frag_a, dequant_frag_b);
+//    cute::tuple<decltype(fragment_scale_a), decltype(fragment_scale_b)> fragment_scale(fragment_scale_a, fragment_scale_b);
+//    cute::tuple<decltype(frag_copy_A_a), decltype(frag_copy_A_b)> frag_copy_A(frag_copy_A_a, frag_copy_A_b);
+//    cute::tuple<decltype(frag_copy_B_a), decltype(frag_copy_B_b)> frag_copy_B(frag_copy_B_a, frag_copy_B_b);
+//    cute::tuple<decltype(frag_copy_Scale_a), decltype(frag_copy_Scale_b)> frag_copy_Scale(frag_copy_Scale_a, frag_copy_Scale_b);
+////auto& mma_A_0 = cute::get<0>(mma_A_tuple);  // 引用 mma_A_a
+////auto& mma_A_1 = cute::get<1>(mma_A_tuple);  // 引用 mma_A_b
+    decltype(mma_A_a)* mma_A[] = {&mma_A_a, &mma_A_b};
+    decltype(mma_B_a)* mma_B[] = {&mma_B_a, &mma_B_b};
+    decltype(dequant_frag_a)* dequant_frag[] = {&dequant_frag_a, &dequant_frag_b};
+    decltype(fragment_scale_a)* fragment_scale[] = {&fragment_scale_a, &fragment_scale_b};
+    decltype(frag_copy_A_a)* frag_copy_A[] = {&frag_copy_A_a, &frag_copy_A_b};
+    decltype(frag_copy_B_a)* frag_copy_B[] = {&frag_copy_B_a, &frag_copy_B_b};
+    decltype(frag_copy_Scale_a)* frag_copy_Scale[] = {&frag_copy_Scale_a, &frag_copy_Scale_b};
 
 #endif    
     Tensor tAgA = thr_copy_A.retile_S(tCgA);
@@ -308,8 +315,8 @@ public:
 
 #if 1
     auto dequant = [&](int start_lut_id, const int buffer_idx) {
-      constexpr int N = decltype(cute::size<1>(mma_B))::value;
-      constexpr int K = decltype(cute::size(mma_B))::value / N;
+      constexpr int N = decltype(cute::size<1>(*mma_B[buffer_idx]))::value;
+      constexpr int K = decltype(cute::size(*mma_B[buffer_idx]))::value / N;
   
       using src_compress_type = uint32_t;
       using dst_compress_type = uint32_t;
@@ -333,13 +340,13 @@ public:
 
           #pragma unroll
           for (int v = 0; v < src_vec_size; v++) {
-            src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(cute::get<buffer_idx>(dequant_frag).data()))[n*src_loop_num + l][v];
+            src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag[buffer_idx]->data()))[n*src_loop_num + l][v];
             int dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
   
             #pragma unroll
             for (int c = 0; c < src_compress_size; c++) {
               uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
-              float scale_value = cute::get<buffer_idx>(fragment_scale_a)((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE))); 
+              float scale_value = (*fragment_scale[buffer_idx])((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE))); 
   
               dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
               lut_id = (lut_id + 1) % LUT_NUM;
@@ -349,14 +356,14 @@ public:
   
         #pragma unroll
         for (int l = 0; l < dst_loop_num; l++) {
-          reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(cute::get<buffer_idx>(mma_B_a).data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
+          reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(cute::raw_pointer_cast(mma_B[buffer_idx]->data()))[n * dst_loop_num + l] = reinterpret_cast<sycl::vec<dst_compress_type, dst_vec_size>*>(dst)[l];
         }
       }
     };
 
-    copy(params.tiled_copy_b, tBgB(_,_,_,k_start_idx), cute::get<0>(frag_copy_B)); 
-    copy(params.tiled_copy_scale, tSgS(_,_,_,k_start_idx * BLK_K/params.group_size), cute::get<0>(frag_copy_Scale));
-    copy(params.tiled_copy_a, tAgA(_,_,_,k_start_idx), cute::get<0>(frag_copy_A));
+    copy(params.tiled_copy_b, tBgB(_,_,_,k_start_idx), *frag_copy_B[0]); 
+    copy(params.tiled_copy_scale, tSgS(_,_,_,k_start_idx * BLK_K/params.group_size), *frag_copy_Scale[0]);
+    copy(params.tiled_copy_a, tAgA(_,_,_,k_start_idx), *frag_copy_A[0]);
     
     if (prefetch_k < k_tile_count) {
       prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
@@ -365,24 +372,23 @@ public:
     prefetch_k++;
     
     for (int k_tile = k_start_idx + 1, k_s = 1; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
-      constexpr int buf_idx = k_tile % 2;
+      const int buf_idx = k_tile % 2;
     
-      dequant(start_lut_id, buf_idx);
+      dequant(start_lut_id, 1 - buf_idx);
     
-      copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), cute::get<buf_idx>(frag_copy_B));
-      copy(params.tiled_copy_scale, tSgS(_,_,_,(k_start_idx+k_s)*BLK_K/params.group_size), cute::get<buf_idx>(frag_copy_Scale));
-      copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), cute::get<buf_idx>(frag_copy_A));
+      copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), *frag_copy_B[buf_idx]);
+      copy(params.tiled_copy_scale, tSgS(_,_,_,(k_start_idx+k_s)*BLK_K/params.group_size), *frag_copy_Scale[buf_idx]);
+      copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), *frag_copy_A[buf_idx]);
     
       if (prefetch_k < k_tile_count) {
         prefetch(tiled_prefetch_a, pAgA(_,_,_,prefetch_k));
         prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
       }
    
-      constexpr int idx = 1 - buf_idx;
-      cute::gemm(tiled_mma, cute::get<idx>(frag_copy_A), cute::get<idx>(frag_copy_B), accumulators);
+      cute::gemm(tiled_mma, *mma_A[1 - buf_idx], *mma_B[1 - buf_idx], accumulators);
       barrier_wait(3);
     }
-    cute::gemm(tiled_mma, cute::get<1>(frag_copy_A), cute::get<1>(frag_copy_B), accumulators);
+    cute::gemm(tiled_mma, *mma_A[1], *mma_B[1], accumulators);
 
 #else
 
