@@ -374,8 +374,13 @@ public:
     for (int k_tile = k_start_idx + 1, k_s = 1; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
       const int buf_idx = k_tile % 2;
     
-      dequant(start_lut_id, 1 - buf_idx);
-    
+      //dequant(start_lut_id, 1 - buf_idx);
+      if(buf_idx == 1) {
+        dequant(start_lut_id, 0);
+      } else {
+        dequant(start_lut_id, 1);
+      }
+
       copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), *frag_copy_B[buf_idx]);
       copy(params.tiled_copy_scale, tSgS(_,_,_,(k_start_idx+k_s)*BLK_K/params.group_size), *frag_copy_Scale[buf_idx]);
       copy(params.tiled_copy_a, tAgA(_,_,_,k_tile), *frag_copy_A[buf_idx]);
