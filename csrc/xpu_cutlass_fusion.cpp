@@ -52,7 +52,7 @@ using ElementOutput = float;
 
 using ProblemShape = Shape<int, int, int, int>;
 
-using TileShape = Shape<_64, _128, _64>;
+using TileShape = Shape<_64, _128, _32>;
 using TiledMma =
     typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                   Layout<Shape<_2, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
@@ -310,10 +310,10 @@ public:
       prefetch(tiled_prefetch_b, pBgB(_,_,_,prefetch_k));
     }
 
-    int start_lut_id = sg_idx % LUT_NUM;
+    //int start_lut_id = sg_idx % LUT_NUM;
 
 #if 1
-    auto dequant = [&](decltype(dequant_frag_a)* dequant_frag_, decltype(fragment_scale_a)* fragment_scale_, decltype(mma_B_a)* mma_B_) {
+    auto dequant = [](decltype(dequant_frag_a)* dequant_frag_, decltype(fragment_scale_a)* fragment_scale_, decltype(mma_B_a)* mma_B_, float(*quant_map)[16]) {
       constexpr int N = decltype(cute::size<1>(*mma_B_))::value;
       constexpr int K = decltype(cute::size(*mma_B_))::value / N;
   
@@ -330,7 +330,7 @@ public:
   
       ElementMMA dst[dst_loop_num * dst_compress_size * dst_vec_size];
   
-      int lut_id = start_lut_id;
+      int lut_id = syclcompat::get_nd_item<1>().get_sub_group().get_group_linear_id() % LUT_NUM; //start_lut_id;
       #pragma unroll
       for (int n = 0; n < N; n++) {
 
@@ -339,7 +339,6 @@ public:
 
           #pragma unroll
           for (int v = 0; v < src_vec_size; v++) {
-            //src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag[buffer_idx]->data()))[n*src_loop_num + l][v];
             src_compress_type src_value = reinterpret_cast<sycl::vec<src_compress_type, src_vec_size>*>(cute::raw_pointer_cast(dequant_frag_->data()))[n*src_loop_num + l][v];
             int dst_base_idx = l * src_vec_size * src_compress_size + v * src_compress_size;
   
@@ -348,7 +347,7 @@ public:
               uint8_t bit_value = (src_value >> (4 * (((c + 1) & 1) + (c >> 1) * 2))) & 0xF;
               float scale_value = (*fragment_scale_)((n * BLK_K  + dst_base_idx + c) >> (31 - std::countl_zero<unsigned int>(GROUP_SIZE))); 
   
-              dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map_[lut_id][bit_value] * scale_value);
+              dst[dst_base_idx + c] = static_cast<ElementMMA>(quant_map[lut_id][bit_value] * scale_value);
               lut_id = (lut_id + 1) % LUT_NUM;
             }
           }
@@ -371,8 +370,10 @@ public:
     }
     prefetch_k++;
     
+    int buf_idx = 0;
+
     for (int k_tile = k_start_idx + 1, k_s = 1; k_tile < k_tile_count; k_tile++, k_s++, prefetch_k++) {
-      const int buf_idx = k_tile % 2;
+      buf_idx ^= 1; //k_tile % 2;
     
       //dequant(start_lut_id, 1 - buf_idx);
       //if(buf_idx == 1) {
@@ -380,7 +381,13 @@ public:
       //} else {
       //  dequant(start_lut_id, 1);
       //}
-      dequant(dequant_frag[1 - buf_idx], fragment_scale[1 - buf_idx], mma_B[1 - buf_idx]);
+
+      dequant(dequant_frag[1 - buf_idx], fragment_scale[1 - buf_idx], mma_B[1 - buf_idx], quant_map_);
+      //if(buf_idx == 1) {
+      //  dequant(dequant_frag[0], fragment_scale[0], mma_B[0]);
+      //} else {
+      //  dequant(dequant_frag[1], fragment_scale[1], mma_B[1]);
+      //}
 
       copy(params.tiled_copy_b, tBgB(_,_,_,k_tile), *frag_copy_B[buf_idx]);
       copy(params.tiled_copy_scale, tSgS(_,_,_,(k_start_idx+k_s)*BLK_K/params.group_size), *frag_copy_Scale[buf_idx]);
@@ -392,6 +399,7 @@ public:
       }
    
       cute::gemm(tiled_mma, *mma_A[1 - buf_idx], *mma_B[1 - buf_idx], accumulators);
+
       barrier_wait(3);
     }
     cute::gemm(tiled_mma, *mma_A[1], *mma_B[1], accumulators);
